@@ -56,7 +56,8 @@
     ".": {
       "types": "./dist/index.d.ts",
       "require": "./dist/index.js",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./package.json": "./package.json"
   },
@@ -71,7 +72,8 @@
   ],
   "gypfile": true,
   "engines": {
-    "node": ">=18"
+    "node": ">=18",
+    "npm": ">=9"
   },
   "scripts": {
     "clean": "rimraf dist test-build build prebuilds",
@@ -84,7 +86,8 @@
     "install": "node-gyp-build",
     "test": "npm run build:cpp && npm run build:test && mocha",
     "test:quick": "mocha",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run lint && npm run build:ts"
   },
   "dependencies": {
     "node-addon-api": "^8.3.0",
@@ -96,10 +99,10 @@
     "@types/node": "^22.7.0",
     "chai": "^4.5.0",
     "mocha": "^10.7.3",
-    "node-gyp": "^12.4.0",
     "prebuildify": "^6.0.0",
     "rimraf": "^5.0.7",
     "ts-node": "^10.9.2",
     "typescript": "^5.6.3"
-  }
+  },
+  "sideEffects": false
 }

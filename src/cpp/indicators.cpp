@@ -145,24 +145,51 @@ BbandsResult bollinger(const double* p, size_t n, int period, double stdDev) {
 std::vector<double> volatility(const double* p, size_t n, int period) {
   std::vector<double> out(n, NAN_D);
   if (period <= 0) throw std::invalid_argument("period must be > 0");
-  for (size_t i = static_cast<size_t>(period - 1); i < n; ++i) {
-    double mean = 0.0;
-    std::vector<double> rets;
-    rets.reserve(period);
-    // Compute up to (period-1) returns ending at i; skip idx==0 (no previous price)
-    for (int k = 1; k < period; ++k) {
-      size_t idx = i - period + k;
-      if (idx == 0) continue;
-      double prev = p[idx - 1];
-      double r = (prev == 0.0) ? 0.0 : (p[idx] - prev) / prev;
-      rets.push_back(r);
-      mean += r;
+
+  // Для выхода i окно — возвраты r(idx) = (p[idx]-p[idx-1])/p[idx-1]
+  // с idx ∈ [max(1, i-period+1), i-1] (idx==0 исключён: нет предыдущей цены).
+  // Бегущие суммы: каждое значение добавляется/вычитается ровно один раз → O(n)
+  // вместо пересчёта всего окна на каждом шаге (и без аллокации в цикле).
+  double sum = 0.0, sumSq = 0.0;
+  int64_t count = 0;   // конечных возвратов в окне
+  int64_t bad = 0;     // не-конечных (NaN/Inf) возвратов в окне
+  const int64_t len = static_cast<int64_t>(n);
+
+  auto addReturn = [&](int64_t idx) {
+    if (idx < 1 || idx >= len) return;
+    const double prev = p[idx - 1];
+    const double r = (prev == 0.0) ? 0.0 : (p[idx] - prev) / prev;
+    if (!std::isfinite(r)) { ++bad; return; }
+    sum += r; sumSq += r * r; ++count;
+  };
+  auto removeReturn = [&](int64_t idx) {
+    if (idx < 1 || idx >= len) return;
+    const double prev = p[idx - 1];
+    const double r = (prev == 0.0) ? 0.0 : (p[idx] - prev) / prev;
+    if (!std::isfinite(r)) { --bad; return; }
+    sum -= r; sumSq -= r * r; --count;
+  };
+
+  // Первое окно (i = period-1): idx ∈ [1, period-2].
+  int64_t lo = 1;
+  int64_t hi = static_cast<int64_t>(period) - 2;
+  for (int64_t idx = lo; idx <= hi; ++idx) addReturn(idx);
+
+  for (int64_t i = static_cast<int64_t>(period) - 1; i < len; ++i) {
+    if (count > 0 && bad == 0) {
+      const double mean = sum / static_cast<double>(count);
+      double var = sumSq / static_cast<double>(count) - mean * mean;
+      if (var < 0.0) var = 0.0; // защита от вычитания погрешности
+      out[i] = std::sqrt(var);
     }
-    if (rets.empty()) continue;
-    mean /= static_cast<double>(rets.size());
-    double var = 0.0;
-    for (double r : rets) { double d = r - mean; var += d * d; }
-    out[i] = std::sqrt(var / static_cast<double>(rets.size()));
+    // Окно для i+1: [max(1, i+2-period), i] — выходим из окна старое левое,
+    // входит новое правое значение.
+    int64_t nextLo = i + 2 - static_cast<int64_t>(period);
+    if (nextLo < 1) nextLo = 1;
+    const int64_t nextHi = i;
+    for (int64_t idx = lo; idx < nextLo; ++idx) removeReturn(idx);
+    for (int64_t idx = hi + 1; idx <= nextHi; ++idx) addReturn(idx);
+    lo = nextLo; hi = nextHi;
   }
   return out;
 }

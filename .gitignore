@@ -29,3 +29,4 @@ package-lock.json
 package-lock-only.lock
 draft.notes
 *.txt
+.tmp-*

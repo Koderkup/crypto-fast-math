@@ -1,5 +1,10 @@
 
+// Windows-only helper: node-gyp writes build/addon.vcxproj on Windows. On Linux/macOS
+// it emits a Makefile / Xcode project instead, so this script is a no-op there.
 const fs = require('fs');
+
+if (process.platform !== 'win32') process.exit(0);
+
 const vcxf = 'build/addon.vcxproj';
 if (!fs.existsSync(vcxf)) { console.error('addon.vcxproj not found — skipping'); process.exit(0); }
 let xml = fs.readFileSync(vcxf, 'utf8');
