@@ -267,35 +267,291 @@ static Napi::Value bearishSync(const Napi::CallbackInfo& info) {
   return toUint8(env, cfm::bearishImpulse(p.ptr(), p.size()));
 }
 
+// === Priority 1 sync wrappers ===
+
+static Napi::Value stochasticSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  if (env.IsExceptionPending()) return env.Null();
+  int kp = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 14;
+  int dp = info.Length() > 4 ? info[4].As<Napi::Number>().Int32Value() : 3;
+  try {
+    auto r = cfm::stochastic(hi.ptr(), lo.ptr(), cl.ptr(), hi.size(), kp, dp);
+    auto obj = Napi::Object::New(env);
+    obj.Set("k", toArray(env, r.k));
+    obj.Set("d", toArray(env, r.d));
+    return obj;
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+static Napi::Value atrSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  if (env.IsExceptionPending()) return env.Null();
+  int period = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 14;
+  try {
+    auto r = cfm::atr(hi.ptr(), lo.ptr(), cl.ptr(), hi.size(), period);
+    return toArray(env, r);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+static Napi::Value adxSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  if (env.IsExceptionPending()) return env.Null();
+  int period = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 14;
+  try {
+    auto r = cfm::adx(hi.ptr(), lo.ptr(), cl.ptr(), hi.size(), period);
+    auto obj = Napi::Object::New(env);
+    obj.Set("adx", toArray(env, r.adx));
+    obj.Set("plusDI", toArray(env, r.plusDI));
+    obj.Set("minusDI", toArray(env, r.minusDI));
+    return obj;
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+static Napi::Value vwapSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  Arr vol = readArray(info[3], "volume");
+  if (env.IsExceptionPending()) return env.Null();
+    try {
+    auto r = cfm::vwap(hi.ptr(), lo.ptr(), cl.ptr(), vol.ptr(), hi.size());
+    return toArray(env, r);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+// === Priority 2 sync wrappers ===
+
+static Napi::Value obvSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr cl = readArray(info[0], "close");
+  Arr vol = readArray(info[1], "volume");
+  if (env.IsExceptionPending()) return env.Null();
+  try {
+    auto r = cfm::obv(cl.ptr(), vol.ptr(), cl.size());
+    return toArray(env, r);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+static Napi::Value wmaSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr p = readArray(info[0], "prices");
+  if (env.IsExceptionPending()) return env.Null();
+  int period = info[1].As<Napi::Number>().Int32Value();
+  try {
+    return toArray(env, cfm::wma(p.ptr(), p.size(), period));
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+static Napi::Value hmaSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr p = readArray(info[0], "prices");
+  if (env.IsExceptionPending()) return env.Null();
+  int period = info[1].As<Napi::Number>().Int32Value();
+  try {
+    return toArray(env, cfm::hma(p.ptr(), p.size(), period));
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+static Napi::Value cciSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  if (env.IsExceptionPending()) return env.Null();
+  int period = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 20;
+  try {
+    auto r = cfm::cci(hi.ptr(), lo.ptr(), cl.ptr(), hi.size(), period);
+    return toArray(env, r);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+static Napi::Value williamsRSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  if (env.IsExceptionPending()) return env.Null();
+  int period = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 14;
+  try {
+    auto r = cfm::williamsR(hi.ptr(), lo.ptr(), cl.ptr(), hi.size(), period);
+    return toArray(env, r);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+static Napi::Value momentumSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr p = readArray(info[0], "prices");
+  if (env.IsExceptionPending()) return env.Null();
+  int period = info.Length() > 1 ? info[1].As<Napi::Number>().Int32Value() : 10;
+  try {
+    return toArray(env, cfm::momentum(p.ptr(), p.size(), period));
+  } catch (const std::exception& e) {
+        Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+// === Priority 3 sync wrappers ===
+
+static Napi::Value keltnerSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  if (env.IsExceptionPending()) return env.Null();
+  int period = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 20;
+  double mult = info.Length() > 4 ? info[4].As<Napi::Number>().DoubleValue() : 2.0;
+  try {
+    auto r = cfm::keltner(hi.ptr(), lo.ptr(), cl.ptr(), hi.size(), period, mult);
+    auto obj = Napi::Object::New(env);
+    obj.Set("upper", toArray(env, r.upper));
+    obj.Set("middle", toArray(env, r.middle));
+    obj.Set("lower", toArray(env, r.lower));
+    return obj;
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+static Napi::Value donchianSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  if (env.IsExceptionPending()) return env.Null();
+  int period = info.Length() > 2 ? info[2].As<Napi::Number>().Int32Value() : 20;
+  try {
+    auto r = cfm::donchian(hi.ptr(), lo.ptr(), hi.size(), period);
+    auto obj = Napi::Object::New(env);
+    obj.Set("upper", toArray(env, r.upper));
+    obj.Set("middle", toArray(env, r.middle));
+    obj.Set("lower", toArray(env, r.lower));
+    return obj;
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+static Napi::Value rocSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr p = readArray(info[0], "prices");
+  if (env.IsExceptionPending()) return env.Null();
+  int period = info.Length() > 1 ? info[1].As<Napi::Number>().Int32Value() : 10;
+  try {
+    return toArray(env, cfm::roc(p.ptr(), p.size(), period));
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+static Napi::Value parabolicSARSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  if (env.IsExceptionPending()) return env.Null();
+  double step = info.Length() > 2 ? info[2].As<Napi::Number>().DoubleValue() : 0.02;
+  double maxStep = info.Length() > 3 ? info[3].As<Napi::Number>().DoubleValue() : 0.2;
+  try {
+    auto r = cfm::parabolicSAR(hi.ptr(), lo.ptr(), hi.size(), step, maxStep);
+    return toArray(env, r);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+static Napi::Value ichimokuSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  if (env.IsExceptionPending()) return env.Null();
+  try {
+    auto r = cfm::ichimoku(hi.ptr(), lo.ptr(), cl.ptr(), hi.size());
+    auto obj = Napi::Object::New(env);
+    obj.Set("tenkan", toArray(env, r.tenkan));
+    obj.Set("kijun", toArray(env, r.kijun));
+    obj.Set("senkouA", toArray(env, r.senkouA));
+    obj.Set("senkouB", toArray(env, r.senkouB));
+    obj.Set("chikou", toArray(env, r.chikou));
+    return obj;
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
 // ===========================================================================
 // ASYNC: Napi::AsyncWorker + Promise
 // ===========================================================================
-// Асинхронный воркер: тяжёлый C++ код работает в отдельном потоке,
 // основной поток Node.js не блокируется. Результат доставляется через Promise.
 
 struct WorkerInput {
   std::vector<double> prices;   // для однопоточных индикаторов
   std::vector<double> high, low, close; // для medianPrice / typicalPrice
   int ints[4] = {0,0,0,0};      // period / fast / slow / signal
-  double doubles[2] = {0.0,0.0}; // stdDev
+    double doubles[2] = {0.0,0.0}; // stdDev / step
+  double maxStep = 0.0;           // for parabolic SAR
   std::string formula;
   std::string returnType;
   std::vector<std::string> varNames;
   std::vector<std::vector<double>> varColumns;
+  std::vector<double> volume;     // for VWAP, OBV
   double winRate = 0, winAvg = 0, lossAvg = 0;
   enum class Kind {
     SMA, EMA, RSI, Volatility, MedianPrice, TypicalPrice,
-    Kelly, Macd, Bollinger, Bullish, Bearish, CustomFormula
+    Kelly, Macd, Bollinger, Bullish, Bearish, CustomFormula,
+    ATR, ADX, VWAP, Stochastic, OBV, WMA, HMA, CCI, WilliamsR,
+    Momentum, Keltner, Donchian, ROC, ParabolicSAR, Ichimoku
   } kind = Kind::SMA;
 };
 
-enum class OutKind { Array, Object, Number, Uint8 };
+enum class OutKind { Array, Object, Number, Uint8, Object4, Object5 };
 enum class RetKind { Number, Boolean, Array };
 
 struct WorkerOutput {
   OutKind outKind = OutKind::Array;
   std::vector<double> doubles;
-  std::vector<double> arr2, arr3, arr4;   // signal/mid  hist/lower
+  std::vector<double> arr2, arr3, arr4, arr5;   // for multi-output indicators
   std::vector<uint8_t> booleans;
   double number = 0.0;
   RetKind retKind = RetKind::Number;
@@ -373,7 +629,7 @@ void GenericWorker::run() {
     case WorkerInput::Kind::Bearish:
       output_.outKind = OutKind::Uint8;
       output_.booleans = cfm::bearishImpulse(p, n); break;
-    case WorkerInput::Kind::CustomFormula: {
+        case WorkerInput::Kind::CustomFormula: {
       cfm::EvalInput ein;
       ein.variables = input_.varNames;
       ein.candleCount = input_.varColumns.empty() ? 0 : input_.varColumns.front().size();
@@ -388,6 +644,67 @@ void GenericWorker::run() {
       } else {
         output_.doubles = std::move(res.numbers);
       }
+      break;
+    }
+    case WorkerInput::Kind::ATR:
+      output_.doubles = cfm::atr(input_.high.data(), input_.low.data(), input_.close.data(), input_.high.size(), input_.ints[0]); break;
+    case WorkerInput::Kind::ADX: {
+      output_.outKind = OutKind::Object;
+      auto r = cfm::adx(input_.high.data(), input_.low.data(), input_.close.data(), input_.high.size(), input_.ints[0]);
+      output_.doubles = std::move(r.adx);
+      output_.arr2 = std::move(r.plusDI);
+      output_.arr3 = std::move(r.minusDI);
+      break;
+    }
+    case WorkerInput::Kind::VWAP:
+      output_.doubles = cfm::vwap(input_.high.data(), input_.low.data(), input_.close.data(), input_.volume.data(), input_.high.size()); break;
+    case WorkerInput::Kind::Stochastic: {
+      output_.outKind = OutKind::Object;
+      auto r = cfm::stochastic(input_.high.data(), input_.low.data(), input_.close.data(), input_.high.size(), input_.ints[0], input_.ints[1]);
+      output_.doubles = std::move(r.k);
+      output_.arr2 = std::move(r.d);
+      break;
+    }
+    case WorkerInput::Kind::OBV:
+      output_.doubles = cfm::obv(input_.close.data(), input_.volume.data(), input_.close.size()); break;
+    case WorkerInput::Kind::WMA:
+      output_.doubles = cfm::wma(p, n, input_.ints[0]); break;
+    case WorkerInput::Kind::HMA:
+      output_.doubles = cfm::hma(p, n, input_.ints[0]); break;
+    case WorkerInput::Kind::CCI:
+      output_.doubles = cfm::cci(input_.high.data(), input_.low.data(), input_.close.data(), input_.high.size(), input_.ints[0]); break;
+    case WorkerInput::Kind::WilliamsR:
+      output_.doubles = cfm::williamsR(input_.high.data(), input_.low.data(), input_.close.data(), input_.high.size(), input_.ints[0]); break;
+    case WorkerInput::Kind::Momentum:
+      output_.doubles = cfm::momentum(p, n, input_.ints[0]); break;
+    case WorkerInput::Kind::Keltner: {
+      output_.outKind = OutKind::Object;
+      auto r = cfm::keltner(input_.high.data(), input_.low.data(), input_.close.data(), input_.high.size(), input_.ints[0], input_.doubles[0]);
+      output_.doubles = std::move(r.upper);
+      output_.arr2 = std::move(r.middle);
+      output_.arr3 = std::move(r.lower);
+      break;
+    }
+    case WorkerInput::Kind::Donchian: {
+      output_.outKind = OutKind::Object;
+      auto r = cfm::donchian(input_.high.data(), input_.low.data(), input_.high.size(), input_.ints[0]);
+      output_.doubles = std::move(r.upper);
+      output_.arr2 = std::move(r.middle);
+      output_.arr3 = std::move(r.lower);
+      break;
+    }
+    case WorkerInput::Kind::ROC:
+      output_.doubles = cfm::roc(p, n, input_.ints[0]); break;
+    case WorkerInput::Kind::ParabolicSAR:
+      output_.doubles = cfm::parabolicSAR(input_.high.data(), input_.low.data(), input_.high.size(), input_.doubles[0], input_.maxStep); break;
+    case WorkerInput::Kind::Ichimoku: {
+      output_.outKind = OutKind::Object5;
+      auto r = cfm::ichimoku(input_.high.data(), input_.low.data(), input_.close.data(), input_.high.size());
+      output_.doubles = std::move(r.tenkan);
+      output_.arr2 = std::move(r.kijun);
+      output_.arr3 = std::move(r.senkouA);
+      output_.arr4 = std::move(r.senkouB);
+      output_.arr5 = std::move(r.chikou);
       break;
     }
   }
@@ -406,7 +723,7 @@ Napi::Value GenericWorker::makeResult() {
         return arr;
       }
       return toUint8(env, output_.booleans);
-    case OutKind::Object: {
+        case OutKind::Object: {
       auto obj = Napi::Object::New(env);
       switch (input_.kind) {
         case WorkerInput::Kind::Macd:
@@ -417,8 +734,32 @@ Napi::Value GenericWorker::makeResult() {
           obj.Set("upper", toArray(env, output_.doubles));
           obj.Set("middle", toArray(env, output_.arr2));
           obj.Set("lower", toArray(env, output_.arr3)); break;
+        case WorkerInput::Kind::Stochastic:
+          obj.Set("k", toArray(env, output_.doubles));
+          obj.Set("d", toArray(env, output_.arr2)); break;
+        case WorkerInput::Kind::ADX:
+          obj.Set("adx", toArray(env, output_.doubles));
+          obj.Set("plusDI", toArray(env, output_.arr2));
+          obj.Set("minusDI", toArray(env, output_.arr3)); break;
+        case WorkerInput::Kind::Keltner:
+          obj.Set("upper", toArray(env, output_.doubles));
+          obj.Set("middle", toArray(env, output_.arr2));
+          obj.Set("lower", toArray(env, output_.arr3)); break;
+        case WorkerInput::Kind::Donchian:
+          obj.Set("upper", toArray(env, output_.doubles));
+          obj.Set("middle", toArray(env, output_.arr2));
+          obj.Set("lower", toArray(env, output_.arr3)); break;
         default: break;
       }
+      return obj;
+    }
+    case OutKind::Object5: {
+      auto obj = Napi::Object::New(env);
+      obj.Set("tenkan", toArray(env, output_.doubles));
+      obj.Set("kijun", toArray(env, output_.arr2));
+      obj.Set("senkouA", toArray(env, output_.arr3));
+      obj.Set("senkouB", toArray(env, output_.arr4));
+      obj.Set("chikou", toArray(env, output_.arr5));
       return obj;
     }
         case OutKind::Array:
@@ -540,6 +881,168 @@ static Napi::Value bearishAsync(const Napi::CallbackInfo& info) {
   if (info.Env().IsExceptionPending()) return info.Env().Null();
   WorkerInput in; in.kind = WorkerInput::Kind::Bearish;
   in.prices = std::move(p.data);
+  return runAsync(info, std::move(in));
+}
+
+
+// === Priority 1 async wrappers ===
+
+static Napi::Value stochasticAsync(const Napi::CallbackInfo& info) {
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::Stochastic;
+  in.high = std::move(hi.data); in.low = std::move(lo.data); in.close = std::move(cl.data);
+  in.ints[0] = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 14;
+  in.ints[1] = info.Length() > 4 ? info[4].As<Napi::Number>().Int32Value() : 3;
+  return runAsync(info, std::move(in));
+}
+
+static Napi::Value atrAsync(const Napi::CallbackInfo& info) {
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::ATR;
+  in.high = std::move(hi.data); in.low = std::move(lo.data); in.close = std::move(cl.data);
+  in.ints[0] = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 14;
+  return runAsync(info, std::move(in));
+}
+
+static Napi::Value adxAsync(const Napi::CallbackInfo& info) {
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::ADX;
+  in.high = std::move(hi.data); in.low = std::move(lo.data); in.close = std::move(cl.data);
+  in.ints[0] = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 14;
+  return runAsync(info, std::move(in));
+}
+
+static Napi::Value vwapAsync(const Napi::CallbackInfo& info) {
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  Arr vol = readArray(info[3], "volume");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::VWAP;
+  in.high = std::move(hi.data); in.low = std::move(lo.data); in.close = std::move(cl.data); in.volume = std::move(vol.data);
+  return runAsync(info, std::move(in));
+}
+
+// === Priority 2 async wrappers ===
+
+static Napi::Value obvAsync(const Napi::CallbackInfo& info) {
+  Arr cl = readArray(info[0], "close");
+  Arr vol = readArray(info[1], "volume");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::OBV;
+  in.close = std::move(cl.data); in.volume = std::move(vol.data);
+    return runAsync(info, std::move(in));
+}
+
+// === Priority 2-3 async wrappers (continued) ===
+
+static Napi::Value wmaAsync(const Napi::CallbackInfo& info) {
+  Arr p = readArray(info[0], "prices");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::WMA;
+  in.prices = std::move(p.data);
+  in.ints[0] = info[1].As<Napi::Number>().Int32Value();
+  return runAsync(info, std::move(in));
+}
+
+static Napi::Value hmaAsync(const Napi::CallbackInfo& info) {
+  Arr p = readArray(info[0], "prices");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::HMA;
+  in.prices = std::move(p.data);
+  in.ints[0] = info[1].As<Napi::Number>().Int32Value();
+  return runAsync(info, std::move(in));
+}
+
+static Napi::Value cciAsync(const Napi::CallbackInfo& info) {
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::CCI;
+  in.high = std::move(hi.data); in.low = std::move(lo.data); in.close = std::move(cl.data);
+  in.ints[0] = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 20;
+  return runAsync(info, std::move(in));
+}
+
+static Napi::Value williamsRAsync(const Napi::CallbackInfo& info) {
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::WilliamsR;
+  in.high = std::move(hi.data); in.low = std::move(lo.data); in.close = std::move(cl.data);
+  in.ints[0] = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 14;
+  return runAsync(info, std::move(in));
+}
+
+static Napi::Value momentumAsync(const Napi::CallbackInfo& info) {
+  Arr p = readArray(info[0], "prices");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::Momentum;
+  in.prices = std::move(p.data);
+  in.ints[0] = info.Length() > 1 ? info[1].As<Napi::Number>().Int32Value() : 10;
+  return runAsync(info, std::move(in));
+}
+
+static Napi::Value keltnerAsync(const Napi::CallbackInfo& info) {
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::Keltner;
+  in.high = std::move(hi.data); in.low = std::move(lo.data); in.close = std::move(cl.data);
+  in.ints[0] = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 20;
+  in.doubles[0] = info.Length() > 4 ? info[4].As<Napi::Number>().DoubleValue() : 2.0;
+  return runAsync(info, std::move(in));
+}
+
+static Napi::Value donchianAsync(const Napi::CallbackInfo& info) {
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::Donchian;
+  in.high = std::move(hi.data); in.low = std::move(lo.data);
+  in.ints[0] = info.Length() > 2 ? info[2].As<Napi::Number>().Int32Value() : 20;
+  return runAsync(info, std::move(in));
+}
+
+static Napi::Value rocAsync(const Napi::CallbackInfo& info) {
+  Arr p = readArray(info[0], "prices");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::ROC;
+  in.prices = std::move(p.data);
+  in.ints[0] = info.Length() > 1 ? info[1].As<Napi::Number>().Int32Value() : 10;
+  return runAsync(info, std::move(in));
+}
+
+static Napi::Value parabolicSARAsync(const Napi::CallbackInfo& info) {
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::ParabolicSAR;
+  in.high = std::move(hi.data); in.low = std::move(lo.data);
+  in.doubles[0] = info.Length() > 2 ? info[2].As<Napi::Number>().DoubleValue() : 0.02;
+  in.maxStep = info.Length() > 3 ? info[3].As<Napi::Number>().DoubleValue() : 0.2;
+  return runAsync(info, std::move(in));
+}
+
+static Napi::Value ichimokuAsync(const Napi::CallbackInfo& info) {
+  Arr hi = readArray(info[0], "high");
+  Arr lo = readArray(info[1], "low");
+  Arr cl = readArray(info[2], "close");
+  if (info.Env().IsExceptionPending()) return info.Env().Null();
+  WorkerInput in; in.kind = WorkerInput::Kind::Ichimoku;
+  in.high = std::move(hi.data); in.low = std::move(lo.data); in.close = std::move(cl.data);
   return runAsync(info, std::move(in));
 }
 
@@ -671,7 +1174,22 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("typicalPriceSync",   Napi::Function::New(env, typicalPriceSync, "typicalPrice"));
   exports.Set("kellyCriterionSync", Napi::Function::New(env, kellySync, "kellyCriterion"));
   exports.Set("bullishImpulseSync", Napi::Function::New(env, bullishSync, "bullishImpulse"));
-  exports.Set("bearishImpulseSync", Napi::Function::New(env, bearishSync, "bearishImpulse"));
+    exports.Set("bearishImpulseSync", Napi::Function::New(env, bearishSync, "bearishImpulse"));
+  exports.Set("stochasticSync",     Napi::Function::New(env, stochasticSync, "stochastic"));
+  exports.Set("atrSync",            Napi::Function::New(env, atrSync, "atr"));
+  exports.Set("adxSync",            Napi::Function::New(env, adxSync, "adx"));
+  exports.Set("vwapSync",           Napi::Function::New(env, vwapSync, "vwap"));
+  exports.Set("obvSync",            Napi::Function::New(env, obvSync, "obv"));
+  exports.Set("wmaSync",            Napi::Function::New(env, wmaSync, "wma"));
+  exports.Set("hmaSync",            Napi::Function::New(env, hmaSync, "hma"));
+  exports.Set("cciSync",            Napi::Function::New(env, cciSync, "cci"));
+  exports.Set("williamsRSync",      Napi::Function::New(env, williamsRSync, "williamsR"));
+  exports.Set("momentumSync",       Napi::Function::New(env, momentumSync, "momentum"));
+  exports.Set("keltnerSync",        Napi::Function::New(env, keltnerSync, "keltner"));
+  exports.Set("donchianSync",       Napi::Function::New(env, donchianSync, "donchian"));
+  exports.Set("rocSync",            Napi::Function::New(env, rocSync, "roc"));
+  exports.Set("parabolicSARSync",   Napi::Function::New(env, parabolicSARSync, "parabolicSAR"));
+  exports.Set("ichimokuSync",       Napi::Function::New(env, ichimokuSync, "ichimoku"));
     exports.Set("calculateSync",      Napi::Function::New(env, calculateSync, "calculate"));
 
 
@@ -689,10 +1207,25 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("typicalPrice",       Napi::Function::New(env, typicalPriceAsync, "typicalPrice"));
   exports.Set("kellyCriterion",     Napi::Function::New(env, kellyAsync, "kellyCriterion"));
   exports.Set("bullishImpulse",     Napi::Function::New(env, bullishAsync, "bullishImpulse"));
-  exports.Set("bearishImpulse",     Napi::Function::New(env, bearishAsync, "bearishImpulse"));
+    exports.Set("bearishImpulse",     Napi::Function::New(env, bearishAsync, "bearishImpulse"));
+  exports.Set("stochastic",        Napi::Function::New(env, stochasticAsync, "stochastic"));
+  exports.Set("atr",               Napi::Function::New(env, atrAsync, "atr"));
+  exports.Set("adx",               Napi::Function::New(env, adxAsync, "adx"));
+  exports.Set("vwap",              Napi::Function::New(env, vwapAsync, "vwap"));
+  exports.Set("obv",               Napi::Function::New(env, obvAsync, "obv"));
+  exports.Set("wma",               Napi::Function::New(env, wmaAsync, "wma"));
+  exports.Set("hma",               Napi::Function::New(env, hmaAsync, "hma"));
+  exports.Set("cci",               Napi::Function::New(env, cciAsync, "cci"));
+  exports.Set("williamsR",         Napi::Function::New(env, williamsRAsync, "williamsR"));
+  exports.Set("momentum",          Napi::Function::New(env, momentumAsync, "momentum"));
+  exports.Set("keltner",           Napi::Function::New(env, keltnerAsync, "keltner"));
+  exports.Set("donchian",          Napi::Function::New(env, donchianAsync, "donchian"));
+  exports.Set("roc",               Napi::Function::New(env, rocAsync, "roc"));
+  exports.Set("parabolicSAR",      Napi::Function::New(env, parabolicSARAsync, "parabolicSAR"));
+  exports.Set("ichimoku",          Napi::Function::New(env, ichimokuAsync, "ichimoku"));
   exports.Set("calculate",          Napi::Function::New(env, calculateAsync, "calculate"));
 
-      return exports;
+  return exports;
 }
 
 NODE_API_MODULE(addon, Init)

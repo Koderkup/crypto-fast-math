@@ -141,7 +141,7 @@ describe('Indicators (sync)', () => {
     });
   });
 
-  describe('Bearish Impulse', () => {
+    describe('Bearish Impulse', () => {
     it('should return Uint8Array', () => {
       const result = cfm.bearishImpulseSync(close);
       expect(result).to.be.instanceOf(Uint8Array);
@@ -149,6 +149,142 @@ describe('Indicators (sync)', () => {
       for (let i = 0; i < close.length; i++) {
         expect(result[i]).to.be.oneOf([0, 1]);
       }
+    });
+  });
+
+  describe('Stochastic', () => {
+    it('should return k and d arrays', () => {
+      const result = cfm.stochasticSync(high, low, close, 14, 3);
+      expect(result).to.have.property('k');
+      expect(result).to.have.property('d');
+      expect(result.k).to.have.length(close.length);
+      expect(result.d).to.have.length(close.length);
+    });
+  });
+
+  describe('ATR', () => {
+    it('should return ATR array', () => {
+      const result = cfm.atrSync(high, low, close, 14);
+      expect(result).to.have.length(close.length);
+    });
+  });
+
+  describe('ADX', () => {
+    it('should return adx, plusDI, minusDI arrays', () => {
+      const result = cfm.adxSync(high, low, close, 14);
+      expect(result).to.have.property('adx');
+      expect(result).to.have.property('plusDI');
+      expect(result).to.have.property('minusDI');
+      expect(result.adx).to.have.length(close.length);
+      expect(result.plusDI).to.have.length(close.length);
+      expect(result.minusDI).to.have.length(close.length);
+    });
+  });
+
+  describe('VWAP', () => {
+    it('should return VWAP array', () => {
+      const volume = [100, 110, 105, 120, 130, 125, 115, 140, 150, 145, 160];
+      const result = cfm.vwapSync(high, low, close, volume);
+      expect(result).to.have.length(close.length);
+    });
+  });
+
+  describe('OBV', () => {
+    it('should return OBV array', () => {
+      const volume = [100, 110, 105, 120, 130, 125, 115, 140, 150, 145, 160];
+      const result = cfm.obvSync(close, volume);
+      expect(result).to.have.length(close.length);
+    });
+  });
+
+  describe('WMA', () => {
+    it('should return weighted moving average', () => {
+      const result = cfm.wmaSync(prices, 3);
+      expect(result).to.have.length(prices.length);
+      expect(result[0]).to.be.NaN;
+      expect(result[1]).to.be.NaN;
+    });
+  });
+
+  describe('HMA', () => {
+    it('should return Hull moving average', () => {
+      const result = cfm.hmaSync(prices, 3);
+      expect(result).to.have.length(prices.length);
+    });
+  });
+
+  describe('CCI', () => {
+    it('should return CCI array', () => {
+      const result = cfm.cciSync(high, low, close, 14);
+      expect(result).to.have.length(close.length);
+    });
+  });
+
+  describe('Williams %R', () => {
+    it('should return Williams %R array', () => {
+      const result = cfm.williamsRSync(high, low, close, 14);
+      expect(result).to.have.length(close.length);
+    });
+  });
+
+  describe('Momentum', () => {
+    it('should return momentum array', () => {
+      const result = cfm.momentumSync(prices, 10);
+      expect(result).to.have.length(prices.length);
+    });
+  });
+
+  describe('Keltner', () => {
+    it('should return upper, middle, lower bands', () => {
+      const result = cfm.keltnerSync(high, low, close, 20, 2.0);
+      expect(result).to.have.property('upper');
+      expect(result).to.have.property('middle');
+      expect(result).to.have.property('lower');
+      expect(result.upper).to.have.length(close.length);
+      expect(result.middle).to.have.length(close.length);
+      expect(result.lower).to.have.length(close.length);
+    });
+  });
+
+  describe('Donchian', () => {
+    it('should return upper, middle, lower bands', () => {
+      const result = cfm.donchianSync(high, low, 20);
+      expect(result).to.have.property('upper');
+      expect(result).to.have.property('middle');
+      expect(result).to.have.property('lower');
+      expect(result.upper).to.have.length(high.length);
+      expect(result.middle).to.have.length(high.length);
+      expect(result.lower).to.have.length(high.length);
+    });
+  });
+
+  describe('ROC', () => {
+    it('should return rate of change array', () => {
+      const result = cfm.rocSync(prices, 10);
+      expect(result).to.have.length(prices.length);
+    });
+  });
+
+  describe('Parabolic SAR', () => {
+    it('should return SAR array', () => {
+      const result = cfm.parabolicSARSync(high, low, 0.02, 0.2);
+      expect(result).to.have.length(high.length);
+    });
+  });
+
+  describe('Ichimoku', () => {
+    it('should return tenkan, kijun, senkouA, senkouB, chikou', () => {
+      const result = cfm.ichimokuSync(high, low, close);
+      expect(result).to.have.property('tenkan');
+      expect(result).to.have.property('kijun');
+      expect(result).to.have.property('senkouA');
+      expect(result).to.have.property('senkouB');
+      expect(result).to.have.property('chikou');
+      expect(result.tenkan).to.have.length(close.length);
+      expect(result.kijun).to.have.length(close.length);
+      expect(result.senkouA).to.have.length(close.length);
+      expect(result.senkouB).to.have.length(close.length);
+      expect(result.chikou).to.have.length(close.length);
     });
   });
 });
@@ -179,6 +315,107 @@ describe('Indicators (async)', () => {
   it('Kelly async should match sync', async () => {
     const sync = cfm.kellyCriterionSync(0.6, 200, 100);
     const asyncRes = await cfm.kellyCriterion(0.6, 200, 100);
-    expect(asyncRes).to.be.closeTo(sync, 0.001);
+        expect(asyncRes).to.be.closeTo(sync, 0.001);
+  });
+
+  it('Stochastic async should match sync', async () => {
+    const syncResult = cfm.stochasticSync(high, low, close, 14, 3);
+    const asyncResult = await cfm.stochastic(high, low, close, 14, 3);
+    expect(asyncResult.k).to.have.length(syncResult.k.length);
+    expect(asyncResult.d).to.have.length(syncResult.d.length);
+  });
+
+  it('ATR async should match sync', async () => {
+    const syncResult = cfm.atrSync(high, low, close, 14);
+    const asyncResult = await cfm.atr(high, low, close, 14);
+    expect(asyncResult).to.have.length(syncResult.length);
+  });
+
+  it('ADX async should match sync', async () => {
+    const syncResult = cfm.adxSync(high, low, close, 14);
+    const asyncResult = await cfm.adx(high, low, close, 14);
+    expect(asyncResult.adx).to.have.length(syncResult.adx.length);
+  });
+
+  it('VWAP async should match sync', async () => {
+    const volume = [100, 110, 105, 120, 130, 125, 115, 140, 150, 145, 160];
+    const syncResult = cfm.vwapSync(high, low, close, volume);
+    const asyncResult = await cfm.vwap(high, low, close, volume);
+    expect(asyncResult).to.have.length(syncResult.length);
+  });
+
+  it('OBV async should match sync', async () => {
+    const volume = [100, 110, 105, 120, 130, 125, 115, 140, 150, 145, 160];
+    const syncResult = cfm.obvSync(close, volume);
+    const asyncResult = await cfm.obv(close, volume);
+    expect(asyncResult).to.have.length(syncResult.length);
+  });
+
+  it('WMA async should match sync', async () => {
+    const syncResult = cfm.wmaSync(prices, 3);
+    const asyncResult = await cfm.wma(prices, 3);
+    expect(asyncResult).to.have.length(syncResult.length);
+  });
+
+  it('HMA async should match sync', async () => {
+    const syncResult = cfm.hmaSync(prices, 3);
+    const asyncResult = await cfm.hma(prices, 3);
+    expect(asyncResult).to.have.length(syncResult.length);
+  });
+
+  it('CCI async should match sync', async () => {
+    const syncResult = cfm.cciSync(high, low, close, 14);
+    const asyncResult = await cfm.cci(high, low, close, 14);
+    expect(asyncResult).to.have.length(syncResult.length);
+  });
+
+  it('Williams R async should match sync', async () => {
+    const syncResult = cfm.williamsRSync(high, low, close, 14);
+    const asyncResult = await cfm.williamsR(high, low, close, 14);
+    expect(asyncResult).to.have.length(syncResult.length);
+  });
+
+  it('Momentum async should match sync', async () => {
+    const syncResult = cfm.momentumSync(prices, 10);
+    const asyncResult = await cfm.momentum(prices, 10);
+    expect(asyncResult).to.have.length(syncResult.length);
+  });
+
+  it('Keltner async should match sync', async () => {
+    const syncResult = cfm.keltnerSync(high, low, close, 20, 2.0);
+    const asyncResult = await cfm.keltner(high, low, close, 20, 2.0);
+    expect(asyncResult).to.have.property('upper');
+    expect(asyncResult).to.have.property('middle');
+    expect(asyncResult).to.have.property('lower');
+  });
+
+  it('Donchian async should match sync', async () => {
+    const syncResult = cfm.donchianSync(high, low, 20);
+    const asyncResult = await cfm.donchian(high, low, 20);
+    expect(asyncResult).to.have.property('upper');
+    expect(asyncResult).to.have.property('middle');
+    expect(asyncResult).to.have.property('lower');
+  });
+
+  it('ROC async should match sync', async () => {
+    const syncResult = cfm.rocSync(prices, 10);
+    const asyncResult = await cfm.roc(prices, 10);
+    expect(asyncResult).to.have.length(syncResult.length);
+  });
+
+  it('Parabolic SAR async should match sync', async () => {
+    const syncResult = cfm.parabolicSARSync(high, low, 0.02, 0.2);
+    const asyncResult = await cfm.parabolicSAR(high, low, 0.02, 0.2);
+    expect(asyncResult).to.have.length(syncResult.length);
+  });
+
+  it('Ichimoku async should match sync', async () => {
+    const syncResult = cfm.ichimokuSync(high, low, close);
+    const asyncResult = await cfm.ichimoku(high, low, close);
+    expect(asyncResult.tenkan).to.have.length(syncResult.tenkan.length);
+    expect(asyncResult.kijun).to.have.length(syncResult.kijun.length);
+    expect(asyncResult.senkouA).to.have.length(syncResult.senkouA.length);
+    expect(asyncResult.senkouB).to.have.length(syncResult.senkouB.length);
+    expect(asyncResult.chikou).to.have.length(syncResult.chikou.length);
   });
 });

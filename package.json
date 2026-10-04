@@ -1,39 +1,77 @@
 {
   "name": "crypto-fast-math",
-  "version": "1.0.0",
-  "description": "High-performance trading & crypto math for Node.js — C++ core via Node-API, ready-made indicators + custom ExprTk formulas, zero-config prebuilt binaries.",
+  "version": "0.1.0",
+  "description": "High-performance trading & crypto math for Node.js — C++ core via Node-API, 25+ ready-made technical indicators + custom ExprTk formulas, zero-config prebuilt binaries.",
   "keywords": [
     "trading",
     "crypto",
     "backtesting",
     "indicators",
     "technical-analysis",
+    "technical-indicators",
     "sma",
     "ema",
+    "wma",
+    "hma",
     "rsi",
     "macd",
     "bollinger",
+    "stochastic",
+    "atr",
+    "adx",
+    "vwap",
+    "obv",
+    "cci",
+    "williams-r",
+    "momentum",
+    "keltner",
+    "donchian",
+    "roc",
+    "parabolic-sar",
+    "ichimoku",
+    "exprtk",
     "c-plus-plus",
     "node-addon",
-    "napi"
+    "napi",
+    "n-api",
+    "native",
+    "performance"
   ],
-  "author": "Koderkup",
+  "author": {
+    "name": "Koderkup",
+    "url": "https://github.com/Koderkup"
+  },
   "license": "MIT",
+  "homepage": "https://github.com/Koderkup/crypto-fast-math#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Koderkup/crypto-fast-math.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Koderkup/crypto-fast-math/issues"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist",
     "prebuilds",
-    "build/Release/addon.node",
-    "src/cpp/exprtk.hpp",
+    "binding.gyp",
+    "src/cpp",
     "package.json",
     "README.md",
     "LICENSE"
   ],
   "gypfile": true,
   "engines": {
-    "node": ">=18",
-    "python": ">=3"
+    "node": ">=18"
   },
   "scripts": {
     "clean": "rimraf dist test-build build prebuilds",
@@ -42,8 +80,8 @@
     "build:ts": "tsc",
     "build": "npm run build:cpp && npm run build:ts",
     "build:test": "tsc -p tsconfig.test.json",
-    "prebuild:bin": "prebuildify --napi --strip --pre-existing",
     "prebuild": "npm run build:cpp && prebuildify --napi --strip",
+    "install": "node-gyp-build",
     "test": "npm run build:cpp && npm run build:test && mocha",
     "test:quick": "mocha",
     "lint": "tsc --noEmit"
@@ -59,7 +97,7 @@
     "chai": "^4.5.0",
     "mocha": "^10.7.3",
     "node-gyp": "^12.4.0",
-    "prebuildify": "^4.0.0",
+    "prebuildify": "^6.0.0",
     "rimraf": "^5.0.7",
     "ts-node": "^10.9.2",
     "typescript": "^5.6.3"
