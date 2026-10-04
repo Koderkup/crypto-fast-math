@@ -55,7 +55,7 @@ import * as cfm from 'crypto-fast-math';
 
 // SMA — sync
 const sma = cfm.smaSync([100, 102, 101, 105, 107], 3);
-// → Float64Array [NaN, NaN, 101.0, 102.67, 104.33]
+// → [NaN, NaN, 101.0, 102.67, 104.33]
 
 // EMA — async (non-blocking)
 const ema = await cfm.ema([100, 102, 101, 105, 107], 3);
@@ -65,7 +65,7 @@ const rsi = cfm.rsiSync([100, 102, 101, 105, 107, 110, 108, 112], 3);
 
 // Bollinger Bands
 const bb = cfm.bollingerSync(prices, 20, 2.0);
-// → { upper: Float64Array, middle: Float64Array, lower: Float64Array }
+// → { upper: number[], middle: number[], lower: number[] }
 
 // Custom ExprTk formula
 const result = cfm.calculateSync({
@@ -91,32 +91,32 @@ const sma = addon.smaSync([100, 102, 101, 105, 107], 3);
 
 ### Indicators
 
-#### `smaSync(prices: NumericArray, period: number): Float64Array`
+#### `smaSync(prices: NumericArray, period: number): number[]`
 Returns SMA with `NaN` for the first `period-1` elements.
 
-#### `emaSync(prices: NumericArray, period: number): Float64Array`
+#### `emaSync(prices: NumericArray, period: number): number[]`
 EMA with smoothing factor `α = 2/(period+1)`. Seeded with SMA.
 
-#### `rsiSync(prices: NumericArray, period: number): Float64Array`
+#### `rsiSync(prices: NumericArray, period: number): number[]`
 Wilder-style RSI. Values in `[0, 100]`, `NaN` before `period` deltas accumulated.
 
-#### `volatilitySync(prices: NumericArray, period: number): Float64Array`
-Rolling standard deviation of log returns over `period` candles.
+#### `volatilitySync(prices: NumericArray, period: number): number[]`
+Rolling standard deviation of returns over `period` candles.
 
-#### `medianPriceSync(high, low): Float64Array`
+#### `medianPriceSync(high, low): number[]`
 Each element = `(high + low) / 2`.
 
-#### `typicalPriceSync(high, low, close): Float64Array`
+#### `typicalPriceSync(high, low, close): number[]`
 Each element = `(high + low + close) / 3`.
 
 #### `kellyCriterionSync(winRate, winAvg, lossAvg): number`
 Kelly fraction = `winRate - (1 - winRate) / (winAvg / lossAvg)`.
 
 #### `macdSync(prices, fastPeriod, slowPeriod, signalPeriod): { macd, signal, histogram }`
-Returns three `Float64Array`s of the same length as input.
+Returns three `number[]`s of the same length as input.
 
 #### `bollingerSync(prices, period, stdDev = 2.0): { upper, middle, lower }`
-Returns three `Float64Array`s. Middle is SMA, upper/lower = SMA ± stdDev × σ.
+Returns three `number[]`. Middle is SMA, upper/lower = SMA ± stdDev × σ.
 
 #### `bullishImpulseSync(prices / close): Uint8Array`
 1 where EMA(13)↑ and MACD histogram↑, else 0.
@@ -144,9 +144,9 @@ Every sync function has an async counterpart with the same signature and a
 `Promise<...>` return type:
 
 ```ts
-sma(prices, period) → Promise<Float64Array>
-ema(prices, period) → Promise<Float64Array>
-rsi(prices, period) → Promise<Float64Array>
+sma(prices, period) → Promise<number[]>
+ema(prices, period) → Promise<number[]>
+rsi(prices, period) → Promise<number[]>
 macd(prices, fast, slow, signal) → Promise<{ macd, signal, histogram }>
 bollinger(prices, period, sd?) → Promise<{ upper, middle, lower }>
 // ... etc
@@ -174,6 +174,37 @@ The build process:
 
 ```bash
 npm test
+```
+
+## Performance
+
+Benchmarks compare native C++ addon against hand-written JavaScript on
+100k candles, averaged over 50 runs. For best performance, pass
+`Float64Array` inputs (enables zero-copy `memcpy` into the C++ core).
+
+| Indicator (period)            | JS       | Native  | Speedup  |
+|-------------------------------|----------|---------|----------|
+| Volatility (26)               | 32.8 ms  | 24.1 ms | **1.4×** |
+| Typical Price                 | 15.3 ms  | 7.0 ms  | **2.2×** |
+| ExprTk formula\*              | 15.0 ms  | 9.8 ms  | **1.5×** |
+| SMA (20)                      | 0.7 ms   | 6.6 ms  | 0.1×     |
+| EMA (12)                      | 0.7 ms   | 5.3 ms  | 0.1×     |
+| RSI (14)                      | 1.5 ms   | 6.1 ms  | 0.2×     |
+
+\* `(High - Low) / Close * Volume * Math.sin(Close)`
+
+**Simple indicators (SMA, EMA, RSI)** are so lightweight that V8's JIT
+optimizes them faster than the native function-call + array-conversion
+overhead. Use the native core when:
+
+- Working with **complex custom formulas** via the ExprTk engine
+- Computing **heavy multi-pass indicators** (volatility, Bollinger Bands, MACD)
+- Processing **large datasets** where per-element computation dominates I/O
+
+Run your own benchmark with:
+
+```bash
+node benchmark.js
 ```
 
 ## License

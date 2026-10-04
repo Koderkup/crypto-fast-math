@@ -59,16 +59,23 @@ static Arr readArray(const Napi::Value& v, const char* argName) {
         std::string("TypedArray '") + argName + "' must be numeric").ThrowAsJavaScriptException();
       return out;
     }
-    size_t len = ta.ElementLength();
-    out.data.reserve(len);
-    double buf_val;
-    napi_env env = v.Env();
+        napi_env env = v.Env();
     void* data; size_t ofs; napi_value buf; napi_typedarray_type tt;
+    size_t len = ta.ElementLength();
     napi_get_typedarray_info(env, ta, &tt, &len, &data, &buf, &ofs);
     const uint8_t* base = static_cast<const uint8_t*>(data) + ofs;
+
+    // Fast path: Float64Array — direct memcpy (no element-by-element loop)
+    if (tt == napi_float64_array) {
+      const double* src = reinterpret_cast<const double*>(base);
+      out.data.assign(src, src + len);
+      return out;
+    }
+
+    // Generic path for other typed arrays
+    out.data.reserve(len);
     auto to_double = [&](size_t i)->double {
       switch (tt) {
-        case napi_float64_array: return *reinterpret_cast<const double*>(base + i*8);
         case napi_float32_array: return static_cast<double>(*reinterpret_cast<const float*>(base + i*4));
         case napi_int32_array:   return static_cast<double>(*reinterpret_cast<const int32_t*>(base + i*4));
         case napi_uint32_array:  return static_cast<double>(*reinterpret_cast<const uint32_t*>(base + i*4));
@@ -95,12 +102,19 @@ static std::vector<double> vecFromArray(const Napi::Value& v, const char* name) 
   return std::move(a.data);
 }
 
-/// Преобразует std::vector<double> в Napi::Array (NaN → null для JSON-читаемости).
+/// Converts std::vector<double> → JS Array (NaN → null for JSON readability).
+/// Uses Float64Array + Array.from() for fast bulk conversion (avoids per-element
+/// N-API overhead of creating a napi_value for each element).
 static Napi::Array toArray(Napi::Env env, const std::vector<double>& v) {
-  auto out = Napi::Array::New(env, v.size());
-  for (size_t i = 0; i < v.size(); ++i)
-    out[i] = Napi::Number::New(env, v[i]);
-  return out;
+  // Fast path: memcpy into Float64Array, then let V8 convert via Array.from
+  auto f64 = Napi::Float64Array::New(env, v.size());
+  if (!v.empty()) std::memcpy(f64.Data(), v.data(), v.size() * sizeof(double));
+
+  auto global = env.Global();
+  auto array = global.Get("Array").As<Napi::Function>();
+  auto from = array.Get("from").As<Napi::Function>();
+  Napi::Value result = from.Call(array, { f64 });
+  return result.As<Napi::Array>();
 }
 
 /// Преобразует std::vector<uint8_t> в Napi::Uint8Array.
