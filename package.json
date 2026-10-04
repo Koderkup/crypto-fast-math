@@ -1,0 +1,67 @@
+{
+  "name": "crypto-fast-math",
+  "version": "1.0.0",
+  "description": "High-performance trading & crypto math for Node.js — C++ core via Node-API, ready-made indicators + custom ExprTk formulas, zero-config prebuilt binaries.",
+  "keywords": [
+    "trading",
+    "crypto",
+    "backtesting",
+    "indicators",
+    "technical-analysis",
+    "sma",
+    "ema",
+    "rsi",
+    "macd",
+    "bollinger",
+    "c-plus-plus",
+    "node-addon",
+    "napi"
+  ],
+  "author": "Koderkup",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "prebuilds",
+    "build/Release/addon.node",
+    "src/cpp/exprtk.hpp",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "gypfile": true,
+  "engines": {
+    "node": ">=18",
+    "python": ">=3"
+  },
+  "scripts": {
+    "clean": "rimraf dist test-build build prebuilds",
+    "configure": "node-gyp configure && node scripts/fix-vcxproj.js",
+    "build:cpp": "node-gyp configure && node scripts/fix-vcxproj.js && node-gyp build --release",
+    "build:ts": "tsc",
+    "build": "npm run build:cpp && npm run build:ts",
+    "build:test": "tsc -p tsconfig.test.json",
+    "prebuild:bin": "prebuildify --napi --strip --pre-existing",
+    "prebuild": "npm run build:cpp && prebuildify --napi --strip",
+    "test": "npm run build:cpp && npm run build:test && mocha",
+    "test:quick": "mocha",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.3.0",
+    "node-gyp-build": "^4.8.0"
+  },
+  "devDependencies": {
+    "@types/chai": "^5.2.0",
+    "@types/mocha": "^10.0.2",
+    "@types/node": "^22.7.0",
+    "chai": "^4.5.0",
+    "mocha": "^10.7.3",
+    "node-gyp": "^12.4.0",
+    "prebuildify": "^4.0.0",
+    "rimraf": "^5.0.7",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  }
+}

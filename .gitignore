@@ -1,2 +1,31 @@
-node-modules
+# dependencies
+node_modules/
+
+# native build artifacts
+build/
+*.node
+prebuilds/
+prebuilds.tar.gz
+
+# compiled TS
+dist/
+test-build/
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# misc
+.env
+package-lock.json
+package-lock-only.lock
 draft.notes
+*.txt
