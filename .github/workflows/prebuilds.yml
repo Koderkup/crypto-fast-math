@@ -78,12 +78,19 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: merged
-          merge-multiple: true
           pattern: prebuilds-*
+          # NOTE: no merge-multiple — each artifact keeps its own folder:
+          #   merged/prebuilds-<target>/prebuilds/<target>/crypto-fast-math.node
       - name: Assemble prebuilds
         run: |
           mkdir -p prebuilds
-          cp -r merged/prebuilds/* prebuilds/
+          for dir in merged/prebuilds-*/; do
+            if [ -d "$dir/prebuilds" ]; then
+              cp -rv "$dir/prebuilds/"* prebuilds/
+            fi
+          done
+          echo "--- prebuilds/ contents ---"
+          ls -R prebuilds/
           node scripts/check-prebuilds.js
       - name: Run test suite against the merged prebuilds
         run: npm run test:quick
