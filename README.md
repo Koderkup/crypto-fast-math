@@ -2,6 +2,8 @@
 
 [![npm version](https://img.shields.io/npm/v/crypto-fast-math.svg)](https://www.npmjs.com/package/crypto-fast-math)
 [![npm downloads](https://img.shields.io/npm/dm/crypto-fast-math.svg)](https://www.npmjs.com/package/crypto-fast-math)
+[![CI](https://github.com/Koderkup/crypto-fast-math/actions/workflows/prebuilds.yml/badge.svg)](https://github.com/Koderkup/crypto-fast-math/actions/workflows/prebuilds.yml)
+[![GitHub stars](https://img.shields.io/github/stars/Koderkup/crypto-fast-math)](https://github.com/Koderkup/crypto-fast-math/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 
@@ -27,6 +29,7 @@ const x   = cfm.calculateSync({                            // your own formula
 
 - [Why crypto-fast-math?](#why-crypto-fast-math)
 - [Installation](#installation)
+- [Supported platforms](#supported-platforms)
 - [Quick start](#quick-start)
 - [How to import](#how-to-import)
 - [Examples](#examples)
@@ -69,17 +72,47 @@ npm install crypto-fast-math
 ```
 
 That's it. `node-gyp-build` picks the right prebuilt binary for your OS/architecture during
-`npm install`. Supported prebuilds:
-
-| Platform | Architectures |
-|---|---|
-| Windows | `win32-x64` |
-| Linux (glibc) | `linux-x64`, `linux-arm64` |
-| macOS | `darwin-x64`, `darwin-arm64` (Apple Silicon) |
+`npm install` — prebuilt binaries ship for the five platforms listed in
+[Supported platforms](#supported-platforms).
 
 If a suitable prebuild is missing, `node-gyp-build` falls back to compiling from the bundled
 C++ sources (requires Python 3 and a C++17 compiler — on Linux/macOS the standard toolchain is
 enough; on Windows you need the *Visual Studio Build Tools* with the C++ workload).
+
+> **Alpine Linux / musl libc** is not covered by the bundled prebuilds.
+> `npm install` will fall back to compiling from source — install `build-base`
+> and `python3` in the container first:
+> ```dockerfile
+> RUN apk add --no-cache build-base python3
+> ```
+
+## Supported platforms
+
+| Platform | Architecture | Prebuild | Notes |
+|---|---|---|---|
+| **Windows** | x64 | ✅ | — |
+| Windows | ARM64 | ⚠️ | Fallback compile (VS Build Tools) |
+| **Linux** | x64 (glibc) | ✅ | Ubuntu, Debian, Fedora, RHEL |
+| Linux | arm64 (glibc) | ✅ | — |
+| Linux | x64 (musl) | ⚠️ | Alpine: `apk add build-base python3` |
+| Linux | arm64 (musl) | ⚠️ | Alpine: `apk add build-base python3` |
+| **macOS** | x64 (Intel) | ✅ | — |
+| macOS | arm64 (Apple Silicon) | ✅ | M1 / M2 / M3 |
+| FreeBSD / OpenBSD | any | ⚠️ | Fallback compile |
+| **Browser** | — | ❌ | WebAssembly build planned |
+
+**✅ Prebuild** — install works out of the box.
+**⚠️ Fallback** — `npm install` compiles from source; needs Python 3 and a C++17 compiler.
+**❌ Not supported** — does not work in this environment.
+
+**Also works with:**
+
+- ✅ **Node.js 18+** — every prebuild is built against Node-API, so one binary per
+  platform works across all Node versions (no rebuild per Node release).
+- ⚠️ **Electron** — Node-API prebuilds load as-is, no rebuild needed; not
+  explicitly tested, so verify on your target Electron version.
+- ✅ **Docker** — any Ubuntu/Debian/glibc-based image works out of the box.
+- ⚠️ **Alpine / musl** — fallback compile; see the note in [Installation](#installation).
 
 ## Quick start
 
@@ -774,12 +807,13 @@ npm install
 npm run build        # compiles the C++ addon and the TypeScript
 ```
 
-The build pipeline:
+The build pipeline (as wired in `package.json`):
 
 1. `node-gyp configure` — generates the platform build files.
-2. `scripts/fix-vcxproj.js` — **Windows only:** patches the generated `.vcxproj` to enable RTTI
-   (`/GR`), C++ exceptions (`/EHsc`) and `/bigobj`. ExprTk needs them, but node-gyp disables them
-   by default.
+2. `node scripts/fix-vcxproj.js` — **Windows only:** patches the generated `.vcxproj` to enable
+   RTTI (`/GR`), C++ exceptions (`/EHsc`) and `/bigobj`. ExprTk needs them, but node-gyp disables
+   them by default. **No-op on Linux/macOS** — those platforms emit a Makefile / Xcode project
+   instead, and `binding.gyp` carries the equivalent flags anyway.
 3. `node-gyp build --release` — compiles `src/cpp/*.cpp` into `build/Release/addon.node`.
 4. `tsc` — compiles `src/*.ts` into `dist/`.
 
@@ -789,7 +823,9 @@ Xcode command-line tools on macOS; `build-essential`/clang on Linux).
 **Supported compilers.** `node-gyp` detects Visual Studio **2017–2022** Build Tools.
 Newer previews (e.g. VS 2026 / v18) may not be detected yet — install VS 2022
 Build Tools alongside, or pin the version with `npm config set msvs_version 2022`.
-The same applies on CI: the workflow uses `windows-latest`, which ships VS 2022.
+The same applies on CI: the workflow pins `windows-2022` (which ships VS 2022) instead of
+`windows-latest`, because the latter may point to a newer image whose VS preview `node-gyp`
+cannot detect yet.
 
 > **Windows.** `node-gyp` does not auto-detect MSVC from a plain terminal — run the build commands
 > from a **Developer Command Prompt for Visual Studio** (or call `vcvarsall.bat x64` first), otherwise
@@ -818,9 +854,10 @@ with the merged `prebuilds/`. Locally you can do the same by hand:
 ### 1. Build prebuilds for every target platform
 
 `prebuildify` builds for the **host** OS/architecture only, so run it on each platform you want to
-support — locally or, better, in a CI matrix (`windows-latest`, `ubuntu-latest`, `macos-latest`,
-plus ARM runners if you target them). On Windows, run it from a **Developer Command Prompt for
-Visual Studio** so `node-gyp` can find MSVC.
+support — locally or, better, in a CI matrix. The repo ships `.github/workflows/prebuilds.yml`
+with `windows-2022`, `ubuntu-latest`, `ubuntu-24.04-arm` and `macos-14` (Apple Silicon; the
+Intel build runs there under Rosetta 2 with an x64 Node.js install). On Windows, run it from a
+**Developer Command Prompt for Visual Studio** so `node-gyp` can find MSVC.
 
 ```bash
 npm run prebuild    # compiles the addon and writes prebuilds/<platform>-<arch>/*.node
@@ -839,6 +876,10 @@ prebuilds/
 
 Because the binaries are built against **Node-API**, one prebuild per platform/arch works across
 Node and Electron versions — no need to rebuild per Node release.
+
+`prebuildify` runs its own `node-gyp` build, but the MSVC flags (`/GR`, `/EHsc`, `/bigobj`)
+live in `binding.gyp` itself — so they survive prebuildify's rebuild, and
+`scripts/fix-vcxproj.js` stays belt-and-braces for the local `npm run build` path.
 
 ### 2. Check what will be published
 

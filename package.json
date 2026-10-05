@@ -1,7 +1,7 @@
 {
   "name": "crypto-fast-math",
-  "version": "0.1.10",
-  "description": "High-performance trading & crypto math for Node.js — C++ core via Node-API, 25+ ready-made technical indicators + custom ExprTk formulas, zero-config prebuilt binaries.",
+  "version": "0.1.11",
+  "description": "C++-accelerated trading indicators for Node.js — SMA, RSI, MACD, Bollinger, ADX, Ichimoku + custom ExprTk formulas. Async, zero-config prebuilt binaries.",
   "keywords": [
     "trading",
     "crypto",
@@ -35,7 +35,17 @@
     "napi",
     "n-api",
     "native",
-    "performance"
+    "performance",
+    "algotrading",
+    "algorithmic-trading",
+    "quantitative-finance",
+    "quantitative-trading",
+    "crypto-trading",
+    "trading-bot",
+    "market-analysis",
+    "nodejs-native",
+    "cpp-addon",
+    "node-addon-api"
   ],
   "author": {
     "name": "Koderkup",
