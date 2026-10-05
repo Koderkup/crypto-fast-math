@@ -1,6 +1,6 @@
 {
   "name": "crypto-fast-math",
-  "version": "0.1.8",
+  "version": "0.1.10",
   "description": "High-performance trading & crypto math for Node.js — C++ core via Node-API, 25+ ready-made technical indicators + custom ExprTk formulas, zero-config prebuilt binaries.",
   "keywords": [
     "trading",
@@ -83,7 +83,7 @@
     "build:ts": "tsc",
     "build": "npm run build:cpp && npm run build:ts",
     "build:test": "tsc -p tsconfig.test.json",
-    "prebuild": "npm run build:cpp && prebuildify --napi --strip",
+    "prebuild": "npm run build:cpp && prebuildify --napi --strip --pre-existing",
     "install": "node-gyp-build",
     "test": "npm run build:cpp && npm run build:test && mocha",
     "test:quick": "mocha",
