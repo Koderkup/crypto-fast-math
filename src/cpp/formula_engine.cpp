@@ -1,4 +1,18 @@
 // formula_engine.cpp — динамический движок формул ExprTk (без хардкода метрик).
+
+// ─── MSVC RTTI fix ──────────────────────────────────────────────────────────
+// ExprTk disables its internal RTTI when it sees that the compiler has RTTI
+// turned off (checks _CPPRTTI). node-gyp's common.gypi adds /GR- on Windows,
+// and even with /GR later in the command line MSVC does not always set
+// _CPPRTTI at preprocess time. Force it so ExprTk's dynamic_cast-based
+// expression-node dispatch is available at runtime.
+#if defined(_MSC_VER) && !defined(_CPPRTTI)
+  #define _CPPRTTI 1
+#endif
+// ────────────────────────────────────────────────────────────────────────────
+
+
+// formula_engine.cpp — динамический движок формул ExprTk (без хардкода метрик).
 #include "formula_engine.hpp"
 #include "exprtk.hpp"
 #include <stdexcept>

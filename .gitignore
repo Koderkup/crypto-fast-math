@@ -29,3 +29,4 @@ package-lock-only.lock
 draft.notes
 *.txt
 .tmp-*
+test-cfm/
