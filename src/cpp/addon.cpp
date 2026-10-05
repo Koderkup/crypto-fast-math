@@ -2,6 +2,7 @@
 // C++ ядро общается с TS через этот файл. Формулы парсятся один раз,
 // переменные регистрируются динамически (без хардкода метрик).
 #include <napi.h>
+#include <cstdint>
 #include <vector>
 #include <string>
 #include <cstring>

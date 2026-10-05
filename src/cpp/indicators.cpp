@@ -5,6 +5,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <limits>
+#include <cstdint>
 
 namespace cfm {
 

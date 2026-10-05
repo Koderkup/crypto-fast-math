@@ -5,6 +5,7 @@
 #include <string>
 #include <limits>
 #include <exception>
+#include <cstdint>
 
 #ifdef _WIN32
   #include <process.h>
