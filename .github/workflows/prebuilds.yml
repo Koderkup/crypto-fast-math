@@ -19,21 +19,23 @@ jobs:
         include:
           - os: windows-2022
             target: win32-x64
+            node_arch: x64
           - os: ubuntu-latest
             target: linux-x64
-          # ubuntu-24.04-arm is the native ARM64 runner (free for public repos).
-          # If it is unavailable, emulate instead:
-          #   docker/setup-qemu-action + docker run --platform linux/arm64 node:22
+            node_arch: x64
           - os: ubuntu-24.04-arm
             target: linux-arm64
-          # macos-13 (Intel) is retired by GitHub. Build darwin-x64 on
-          # macos-14 (Apple Silicon) under Rosetta 2 — the resulting binary
-          # still runs on Intel Macs (process.arch === 'x64').
+            node_arch: arm64
+          # macos-13 (Intel) is retired. Build darwin-x64 on macos-14 by
+          # installing the x64 build of Node.js — macOS runs it under
+          # Rosetta 2 transparently, and process.arch === 'x64', which is
+          # what prebuildify needs to emit prebuilds/darwin-x64/.
           - os: macos-14
             target: darwin-x64
-            prebuild_cmd: arch -x86_64 npm run prebuild
+            node_arch: x64
           - os: macos-14
             target: darwin-arm64
+            node_arch: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,13 +43,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          architecture: ${{ matrix.node_arch }}
       - name: Install dependencies
-        # --ignore-scripts: the root "install" script (node-gyp-build) would
-        # otherwise compile the addon from source on a clean checkout — the
-        # workflow builds it explicitly in the next steps.
         run: npm ci --ignore-scripts
       - name: Build addon and prebuilds
-        run: ${{ matrix.prebuild_cmd || 'npm run prebuild' }}
+        run: npm run prebuild
       - name: Verify this platform's binary
         run: node scripts/check-prebuilds.js ${{ matrix.target }}
       - name: Upload prebuild
@@ -71,8 +71,6 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
       - name: Install dependencies
-        # --ignore-scripts: skip the root install script (node-gyp-build);
-        # this job only needs the toolchain (tsc, mocha), not a native build.
         run: npm ci --ignore-scripts
       - name: Build TypeScript
         run: npm run build:ts
