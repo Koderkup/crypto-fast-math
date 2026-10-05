@@ -66,6 +66,7 @@
     "prebuilds",
     "binding.gyp",
     "src/cpp",
+    "scripts",
     "package.json",
     "README.md",
     "LICENSE"
@@ -87,7 +88,7 @@
     "test": "npm run build:cpp && npm run build:test && mocha",
     "test:quick": "mocha",
     "lint": "tsc --noEmit",
-    "prepublishOnly": "npm run lint && npm run build:ts"
+    "prepublishOnly": "npm run lint && npm run build:ts && node scripts/check-prebuilds.js"
   },
   "dependencies": {
     "node-addon-api": "^8.3.0",
@@ -103,6 +104,5 @@
     "rimraf": "^5.0.7",
     "ts-node": "^10.9.2",
     "typescript": "^5.6.3"
-  },
-  "sideEffects": false
+  }
 }

@@ -1,0 +1,96 @@
+name: Prebuilds & publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win32-x64
+          - os: ubuntu-latest
+            target: linux-x64
+          # ubuntu-24.04-arm is the native ARM64 runner (free for public repos).
+          # If it is unavailable, emulate instead:
+          #   docker/setup-qemu-action + docker run --platform linux/arm64 node:22
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          # macos-13 is the last Intel runner (darwin-x64). If it is retired,
+          # build on macos-14 under Rosetta instead:
+          #   run: arch -x86_64 npm run prebuild
+          - os: macos-13
+            target: darwin-x64
+          - os: macos-14
+            target: darwin-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        # --ignore-scripts: the root "install" script (node-gyp-build) would
+        # otherwise compile the addon from source on a clean checkout — the
+        # workflow builds it explicitly in the next steps.
+        run: npm ci --ignore-scripts
+      - name: Build addon and prebuilds
+        run: npm run prebuild
+      - name: Verify this platform's binary
+        run: node scripts/check-prebuilds.js ${{ matrix.target }}
+      - name: Upload prebuild
+        uses: actions/upload-artifact@v4
+        with:
+          name: prebuilds-${{ matrix.target }}
+          path: prebuilds/${{ matrix.target }}/crypto-fast-math.node
+          if-no-files-found: error
+
+  publish:
+    name: Publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Install dependencies
+        # --ignore-scripts: skip the root install script (node-gyp-build);
+        # this job only needs the toolchain (tsc, mocha), not a native build.
+        run: npm ci --ignore-scripts
+      - name: Build TypeScript
+        run: npm run build:ts
+      - name: Download all prebuilds
+        uses: actions/download-artifact@v4
+        with:
+          path: merged
+          merge-multiple: true
+          pattern: prebuilds-*
+      - name: Assemble prebuilds
+        run: |
+          mkdir -p prebuilds
+          cp -r merged/prebuilds/* prebuilds/
+          node scripts/check-prebuilds.js
+      - name: Run test suite against the merged prebuilds
+        run: npm run test:quick
+      - name: Verify package contents
+        run: npm pack --dry-run
+      - name: Publish
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

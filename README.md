@@ -6,8 +6,9 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 
 **High-performance trading & crypto math for Node.js.** A native **C++17 core** (Node-API) with
-**25+ ready-made technical indicators** and a **compiled custom-formula engine** (ExprTk), shipped
-with **prebuilt binaries** for Windows, Linux and macOS — no compiler, no `node-gyp`, no config.
+**25+ ready-made technical indicators** and a **compiled custom-formula engine** (ExprTk) —
+**write formulas, not loops**. Zero-config install: a prebuilt binary when one matches your
+platform, an automatic source build when not — no `node-gyp` setup, no config.
 
 ```ts
 import * as cfm from 'crypto-fast-math';
@@ -27,11 +28,17 @@ const x   = cfm.calculateSync({                            // your own formula
 - [Why crypto-fast-math?](#why-crypto-fast-math)
 - [Installation](#installation)
 - [Quick start](#quick-start)
+- [How to import](#how-to-import)
+- [Examples](#examples)
 - [Ready-made indicators](#ready-made-indicators)
 - [API reference](#api-reference)
 - [Custom formulas (ExprTk engine)](#custom-formulas-exprtk-engine)
+- [Recipes](#recipes)
 - [Performance](#performance)
+- [Where native wins and where JS is fine](#where-native-wins-and-where-js-is-fine)
+- [Browser support](#browser-support)
 - [TypeScript](#typescript)
+- [Troubleshooting](#troubleshooting)
 - [Building from source](#building-from-source)
 - [Running the tests](#running-the-tests)
 - [Publishing to npm (maintainers)](#publishing-to-npm-maintainers)
@@ -44,18 +51,16 @@ const x   = cfm.calculateSync({                            // your own formula
 | | |
 |---|---|
 | ⚡ **Native C++17 core** | Indicators are implemented in C++ and executed outside the JS engine, so per-element computation has no interpreter/JIT overhead. |
-| 🧮 **Compiled custom formulas** | Write any metric as a string. [ExprTk](https://github.com/ArashPartow/exprtk) parses it **once per call** and evaluates it in C++ in a single pass over your columns — measured **~1.3–1.8× faster than idiomatic JS** (`.map` / `Array.from` chains) at 100 k candles. A hand-written tight loop can still beat it; the win is you never write the loop. See [Performance](#performance). |
+| 🧮 **Write formulas, not loops** | Describe any rule once — `'Close > EMA50 and RSI < 30'` — and [ExprTk](https://github.com/ArashPartow/exprtk) **compiles it once** and evaluates it per candle inside the C++ core. Measured **1.0–1.6× faster than idiomatic JS** (`.map` / `Array.from` chains) at 100 k candles; a hand-written tight loop can still beat it — the win is you never write the loop. See [Performance](#performance). |
 | 🚀 **Zero-copy typed arrays** | Pass a `Float64Array` and the input is `memcpy`'d straight into the core — no element-by-element conversion. |
 | 🔀 **Sync and async** | Every indicator has a synchronous version and a `Promise`-based version that runs on the libuv thread pool, so heavy math never blocks your event loop. |
-| 📦 **Zero-config install** | Prebuilt `.node` binaries are bundled in the package and resolved automatically by [`node-gyp-build`](https://github.com/prebuild/node-gyp-build). |
+| 📦 **Zero-config install** | Prebuilt `.node` binaries ship inside the package and are resolved automatically by [`node-gyp-build`](https://github.com/prebuild/node-gyp-build) — with an automatic compile-from-source fallback. |
 | 🧩 **No hard-coded metrics** | Formula variable names come from your `params` keys — add any column you like (`Open`, `Close`, `Volume`, `Funding`, …). |
 | 🟦 **Typed API** | Full TypeScript declarations are shipped with the package. |
 
-> **Design note.** The native core is a *throughput* tool. Simple indicators with the default
-> `number[]` output are roughly on par with well-written JS — the win comes from
-> [`{ output: 'typed' }`](#output-conventions) (no result conversion), `Float64Array` inputs,
-> multi-column indicators and custom formulas, and from the [async API](#sync-vs-async) keeping
-> your event loop free. See [Performance](#performance) for measured numbers per indicator.
+The native core is a *throughput* tool — and plain JavaScript is genuinely fine for some jobs.
+The measured fine print lives in [Where native wins and where JS is fine](#where-native-wins-and-where-js-is-fine);
+raw benchmark numbers are in [Performance](#performance).
 
 ## Installation
 
@@ -99,6 +104,37 @@ const sma = cfm.smaSync(closes, 3);   // number[]
 const ema = await cfm.ema(closes, 3); // number[] (async)
 ```
 
+### How to import
+
+Three equivalent ways — all expose the same functions:
+
+```ts
+// 1. Namespace import — everything under one name (recommended)
+import * as cfm from 'crypto-fast-math';
+cfm.smaSync(closes, 20);
+
+// 2. Named imports — only what you use
+import { smaSync, ema, calculateSync } from 'crypto-fast-math';
+
+// 3. CommonJS
+const cfm = require('crypto-fast-math');
+```
+
+Named imports are preferred when you use only a few indicators — bundlers can
+tree-shake the rest. There is no default export.
+
+**Module format.** The package ships CommonJS with full TypeScript
+declarations. In ESM projects both styles work:
+
+```ts
+import * as cfm from 'crypto-fast-math';  // CJS interop namespace
+import cfm from 'crypto-fast-math';        // default interop (esModuleInterop)
+```
+
+In TypeScript with `"module": "esnext"`, set `"esModuleInterop": true` in
+`tsconfig.json` for the second style. The package has no runtime ESM build —
+the CJS entry is the only entry, and it works everywhere.
+
 ### Sync vs async
 
 Every indicator `xxxSync(...)` has an async twin `xxx(...)` with the **same arguments** that
@@ -121,6 +157,76 @@ await cfm.sma(prices, 20); // non-blocking, runs on the libuv thread pool
 
 A batched `batchSync` API (one boundary crossing for many indicators over the same candles) is on
 the roadmap; today, call the `…Sync` functions one after another — the per-call overhead is small.
+
+## Examples
+
+### Streaming from an exchange (WebSocket)
+
+Compute signals on live klines without blocking the event loop — the point of
+the async API:
+
+```ts
+import WebSocket from 'ws';
+import * as cfm from 'crypto-fast-math';
+
+const closes: number[] = [];
+const ws = new WebSocket('wss://stream.bybit.com/v5/public/linear');
+
+ws.on('message', async (raw) => {
+  const msg = JSON.parse(raw.toString());
+  if (msg.topic !== 'kline.1.BTCUSDT') return;
+
+  const candle = msg.data[0];
+  closes.push(parseFloat(candle.close));
+  if (closes.length < 50) return;
+
+  // Compute on the last 50 candles only
+  const recent = new Float64Array(closes.slice(-50));
+
+  const rsi = await cfm.rsi(recent, 14);       // runs on the thread pool
+  const ema = await cfm.ema(recent, 21);       // event loop keeps serving
+
+  const signal = cfm.calculateSync({
+    formula: 'RSI < 30 and Close > EMA',
+    params: { RSI: rsi, Close: recent, EMA: ema },
+    returnType: 'boolean',
+  });
+
+  if (signal[signal.length - 1]) {
+    console.log('BUY signal');
+  }
+});
+```
+
+### Backtest over 1M candles
+
+Precompute indicators once as typed arrays, then evaluate the whole strategy in
+a single pass:
+
+```ts
+import * as cfm from 'crypto-fast-math';
+
+const candles = loadCandles(); // 1M candles, any source
+const closes  = new Float64Array(candles.map(c => c.close));
+const highs   = new Float64Array(candles.map(c => c.high));
+const lows    = new Float64Array(candles.map(c => c.low));
+const volumes = new Float64Array(candles.map(c => c.volume));
+
+// Precompute indicators once — Float64Array in, Float64Array out
+const ema50 = cfm.emaSync(closes, 50, { output: 'typed' });
+const rsi14 = cfm.rsiSync(closes, 14, { output: 'typed' });
+const atr14 = cfm.atrSync(highs, lows, closes, 14, { output: 'typed' });
+
+// Evaluate the strategy across all candles in one call
+const signals = await cfm.calculate({
+  formula: 'Close > EMA50 and RSI < 30 and ATR > 1.5',
+  params: { Close: closes, EMA50: ema50, RSI: rsi14, ATR: atr14 },
+  returnType: 'boolean',
+});
+
+const entries = signals.filter(Boolean).length;
+console.log(`${entries} entry points`);
+```
 
 ## Ready-made indicators
 
@@ -448,6 +554,52 @@ try {
 The engine also throws on syntactically invalid expressions, so you can validate user-supplied
 formulas before running them over a large dataset.
 
+## Recipes
+
+### Detect a golden cross (EMA50 × EMA200)
+
+ExprTk has no lag operator (`EMA50[-1]` is not supported), so compute the spread
+and find the sign change in JS — one pass over the result:
+
+```ts
+const ema50  = cfm.emaSync(closes, 50, { output: 'typed' });
+const ema200 = cfm.emaSync(closes, 200, { output: 'typed' });
+
+const spread = cfm.calculateSync({
+  formula: 'EMA50 - EMA200',
+  params: { EMA50: ema50, EMA200: ema200 },
+  returnType: 'number',
+}, { output: 'typed' });
+
+const goldenCross = spread.map((v, i) => i > 0 && spread[i - 1] < 0 && v >= 0);
+// goldenCross[i] === true on the candle where EMA50 crosses above EMA200
+```
+
+### Bollinger squeeze (volatility contraction)
+
+```ts
+const bb = cfm.bollingerSync(closes, 20, 2.0, { output: 'typed' });
+const width = cfm.calculateSync({
+  formula: '(Upper - Lower) / Middle * 100',
+  params: { Upper: bb.upper, Lower: bb.lower, Middle: bb.middle },
+  returnType: 'number',
+}, { output: 'typed' });
+// Narrow width → squeeze; watch for a breakout
+```
+
+### RSI oversold with an EMA trend filter
+
+```ts
+const signals = cfm.calculateSync({
+  formula: 'RSI < 30 and Close > EMA50',
+  params: {
+    RSI: cfm.rsiSync(closes, 14),
+    Close: closes,
+    EMA50: cfm.emaSync(closes, 50),
+  },
+}); // boolean[] — true where both conditions hold
+```
+
 ## Performance
 
 Benchmarks below compare the native core against **hand-written, V8-optimised JavaScript** over
@@ -564,6 +716,11 @@ form blocks the event loop.
 node benchmark.js
 ```
 
+## Browser support
+
+❌ **Not supported.** C++ Node-API addons cannot run inside a browser sandbox.
+A WebAssembly build is on the roadmap.
+
 ## TypeScript
 
 Type declarations ship with the package, so everything is typed out of the box. The main exported
@@ -596,6 +753,18 @@ const c = cfm.macdSync(closes, 12, 26, 9);               // { macd: number[]; ..
 const d = cfm.macdSync(closes, 12, 26, 9, { output: 'typed' }); // { macd: Float64Array; ... }
 ```
 
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Error: Cannot find module 'crypto-fast-math'` | Package not installed (or wrong directory) | `npm install crypto-fast-math`; check `node_modules/` |
+| `The specified module could not be found` (Windows) | Missing Visual C++ Redistributable | Install [VC++ Redist x64](https://aka.ms/vs/17/release/vc_redist.x64.exe) |
+| `node-gyp-build` fails during `npm install` | No prebuild for your platform — source fallback needs a toolchain | Windows: Visual Studio Build Tools with the C++ workload; macOS: `xcode-select --install`; Linux: `sudo apt install build-essential` |
+| `ExprTk parse error: ERR239 - Undefined symbol` | Variable not in `params` (names are case-sensitive) | Add the column to `params` or fix the typo |
+| Results are all `NaN` | Warm-up period is included in the output | Slice off the first `period` values: `const clean = rsi.slice(13)` |
+| `all param columns must have equal length` | Columns of different lengths | Slice/pad every column to the same length |
+| `Array '<name>' must contain only numbers or null` | Booleans/strings in a data column | Use `0`/`1`; `null`/`undefined` become `NaN` |
+
 ## Building from source
 
 ```bash
@@ -617,6 +786,11 @@ The build pipeline:
 **Requirements:** Node.js ≥ 18, Python 3, and a C++17 compiler (MSVC *Build Tools* on Windows;
 Xcode command-line tools on macOS; `build-essential`/clang on Linux).
 
+**Supported compilers.** `node-gyp` detects Visual Studio **2017–2022** Build Tools.
+Newer previews (e.g. VS 2026 / v18) may not be detected yet — install VS 2022
+Build Tools alongside, or pin the version with `npm config set msvs_version 2022`.
+The same applies on CI: the workflow uses `windows-latest`, which ships VS 2022.
+
 > **Windows.** `node-gyp` does not auto-detect MSVC from a plain terminal — run the build commands
 > from a **Developer Command Prompt for Visual Studio** (or call `vcvarsall.bat x64` first), otherwise
 > `node-gyp configure` fails with *"Could not find any Visual Studio installation to use"*.
@@ -636,6 +810,10 @@ The suite covers every indicator and the formula engine, including sync/async pa
 This package ships prebuilt binaries **inside** the npm tarball using
 [`prebuildify`](https://github.com/prebuild/prebuildify) + [`node-gyp-build`](https://github.com/prebuild/node-gyp-build),
 so users get a working native module without a compiler.
+
+The recommended flow is fully automated: `.github/workflows/prebuilds.yml`
+builds all five platform binaries on a `v*` git tag and publishes the package
+with the merged `prebuilds/`. Locally you can do the same by hand:
 
 ### 1. Build prebuilds for every target platform
 

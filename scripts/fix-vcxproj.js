@@ -5,6 +5,16 @@ const fs = require('fs');
 
 if (process.platform !== 'win32') process.exit(0);
 
+try {
+  patchVcxproj();
+} catch (err) {
+  // Belt-and-braces only: binding.gyp already sets /GR, /EHsc and /bigobj,
+  // so a failed patch must never break the build.
+  console.warn(`fix-vcxproj: skipped (${err.message})`);
+  process.exit(0);
+}
+
+function patchVcxproj() {
 const vcxf = 'build/addon.vcxproj';
 if (!fs.existsSync(vcxf)) { console.error('addon.vcxproj not found — skipping'); process.exit(0); }
 let xml = fs.readFileSync(vcxf, 'utf8');
@@ -44,5 +54,6 @@ xml = xml.replace(/\/LTCG<\/AdditionalOptions>/g, '</AdditionalOptions>');
 // Remove /LTCG from Lib AdditionalOptions
 xml = xml.replace(/\/LTCG %(AdditionalOptions)/g, '%(AdditionalOptions)');
 
-fs.writeFileSync(vcxf, xml);
-console.log('Fixed: RTTI=true, ExceptionHandling=Sync, /GR in ClCompile, LinkIncremental=false, LTCG disabled');
+  fs.writeFileSync(vcxf, xml);
+  console.log('Fixed: RTTI=true, ExceptionHandling=Sync, /GR in ClCompile, LinkIncremental=false, LTCG disabled');
+}
