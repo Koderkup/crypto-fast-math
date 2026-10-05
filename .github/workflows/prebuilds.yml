@@ -79,17 +79,23 @@ jobs:
         with:
           path: merged
           pattern: prebuilds-*
-          # NOTE: no merge-multiple — each artifact keeps its own folder:
-          #   merged/prebuilds-<target>/prebuilds/<target>/crypto-fast-math.node
+          # NOTE: no merge-multiple — each artifact keeps its own folder.
+          # The exact internal layout depends on upload-artifact@v4 path
+          # handling, so the assembly step below is layout-agnostic: it
+          # walks each artifact folder and finds every *.node file.
       - name: Assemble prebuilds
         run: |
+          echo "=== merged/ tree ==="
+          find merged -type f 2>/dev/null | head -50 || true
+          echo ""
           mkdir -p prebuilds
           for dir in merged/prebuilds-*/; do
-            if [ -d "$dir/prebuilds" ]; then
-              cp -rv "$dir/prebuilds/"* prebuilds/
-            fi
+            echo "--- processing: $dir"
+            target=$(basename "$dir" | sed 's/^prebuilds-//')
+            mkdir -p "prebuilds/$target"
+            find "$dir" -name "*.node" -exec cp -v {} "prebuilds/$target/" \;
           done
-          echo "--- prebuilds/ contents ---"
+          echo "--- prebuilds/ final ---"
           ls -R prebuilds/
           node scripts/check-prebuilds.js
       - name: Run test suite against the merged prebuilds
