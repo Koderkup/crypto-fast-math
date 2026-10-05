@@ -26,11 +26,12 @@ jobs:
           #   docker/setup-qemu-action + docker run --platform linux/arm64 node:22
           - os: ubuntu-24.04-arm
             target: linux-arm64
-          # macos-13 is the last Intel runner (darwin-x64). If it is retired,
-          # build on macos-14 under Rosetta instead:
-          #   run: arch -x86_64 npm run prebuild
-          - os: macos-13
+          # macos-13 (Intel) is retired by GitHub. Build darwin-x64 on
+          # macos-14 (Apple Silicon) under Rosetta 2 — the resulting binary
+          # still runs on Intel Macs (process.arch === 'x64').
+          - os: macos-14
             target: darwin-x64
+            prebuild_cmd: arch -x86_64 npm run prebuild
           - os: macos-14
             target: darwin-arm64
     steps:
@@ -46,7 +47,7 @@ jobs:
         # workflow builds it explicitly in the next steps.
         run: npm ci --ignore-scripts
       - name: Build addon and prebuilds
-        run: npm run prebuild
+        run: ${{ matrix.prebuild_cmd || 'npm run prebuild' }}
       - name: Verify this platform's binary
         run: node scripts/check-prebuilds.js ${{ matrix.target }}
       - name: Upload prebuild

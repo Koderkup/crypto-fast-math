@@ -1,6 +1,6 @@
 {
   "name": "crypto-fast-math",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "High-performance trading & crypto math for Node.js — C++ core via Node-API, 25+ ready-made technical indicators + custom ExprTk formulas, zero-config prebuilt binaries.",
   "keywords": [
     "trading",
