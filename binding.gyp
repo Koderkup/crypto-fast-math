@@ -17,7 +17,7 @@
             ],
 
             # ---- Linux / generic GCC / Clang ----
-            "cflags!": ["-fno-exceptions"],
+            "cflags!": ["-fno-exceptions", "-fno-rtti"],
             "cflags_cc!": ["-fno-exceptions", "-fno-rtti"],
             "cflags_cc": ["-fexceptions", "-frtti", "-std=c++17"],
 
@@ -39,14 +39,18 @@
                         "/bigobj",
                         "/utf-8",
                         "/Zc:__cplusplus",
-                        "/std:c++17"
+                        "/std:c++17",
+                        "/GR",
+                        "/EHsc"
                     ]
                 }
             },
 
             "conditions": [
                 ["OS==\"win\"", {
-                    "defines": ["_HAS_EXCEPTIONS=1"]
+                    "defines": ["_HAS_EXCEPTIONS=1"],
+                    "cflags_cc": ["/GR", "/EHsc"],
+                    "cflags_cc!": ["/GR-", "/EHs-c-", "-fno-rtti", "-fno-exceptions"]
                 }]
             ]
         }
