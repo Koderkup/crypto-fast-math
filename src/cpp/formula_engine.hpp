@@ -41,14 +41,17 @@ EvalResult evaluateFormula(const std::string& formula, const EvalInput& in, Retu
 // a mutex so the same prepared formula can be evaluated from multiple threads
 // (e.g. libuv async workers) safely.
 //
-// Design notes (thread safety):
+// Thread safety:
 //   The compiled ExprTk expression references variable T* pointers held in the
 //   symbol table's storage (`values_`). Multiple concurrent evaluates would
 //   race on shared storage, so `evaluate` takes `mtx_` serializing the
-//   value-swapping + evaluation. Because JS is single-threaded on the main
-//   thread and evaluates are O(n) and fast, hold time is negligible; the async
-//   path gets correctness without unbounded concurrency (which would risk
-//   data races on the shared expression tree internals anyway).
+//   value-swapping + evaluation. JS is single-threaded on the main thread and
+//   evaluates are O(n) and fast, so hold time is negligible.
+//
+//   The registry uses std::shared_ptr so that evaluatePrepared can grab a
+//   strong reference before releasing the registry lock.  This allows
+//   releaseFormula to erase the entry concurrently without invalidating the
+//   object that an in-flight evaluation is using (no use-after-free).
 //
 // Handle lifetime: handles are process-global ints owned by a registry map.
 // They are never recycled during a process, so a stale handle lookup is the
@@ -59,7 +62,14 @@ using FormulaHandle = int32_t;
 /// on parse error or bad arguments.
 FormulaHandle prepareFormula(const std::string& formula, const std::vector<std::string>& variables, ReturnType rt);
 
-/// Evaluate a previously-prepared formula. Returns false if `handle` is unknown.
+/// Evaluate a previously-prepared formula. Returns false if `handle` is unknown
+/// or the variable names/counts do not match the prepared formula.
 bool evaluatePrepared(FormulaHandle handle, const EvalInput& in, EvalResult& out);
+
+/// Erase a prepared-formula handle from the global registry, freeing its memory.
+/// Returns true if the handle was found and removed, false if it was unknown
+/// (already released or never existed).  An in-flight evaluation that already
+/// grabbed a shared_ptr keeps the object alive until it finishes.
+bool releaseFormula(FormulaHandle handle);
 
 } // namespace cfm

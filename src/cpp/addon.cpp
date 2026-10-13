@@ -1270,6 +1270,22 @@ static Napi::Value evaluatePreparedSync(const Napi::CallbackInfo& info) {
 
 
 
+// ─── releaseFormulaSync ──────────────────────────────────────────────────────
+// Frees a previously-prepared formula handle. Safe to call concurrently with
+// evaluatePrepared: the registry holds shared_ptr, so an in-flight evaluation
+// that already grabbed a ref keeps the object alive. Returns true if the
+// handle existed and was removed, false if it was unknown.
+static Napi::Value releaseFormulaSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsNumber()) {
+    Napi::TypeError::New(env, "releaseFormula(handle): expected a number handle").ThrowAsJavaScriptException();
+    return env.Null();
+  }
+  cfm::FormulaHandle h = info[0].As<Napi::Number>().Int32Value();
+  bool ok = cfm::releaseFormula(h);
+  return Napi::Boolean::New(env, ok);
+}
+
 // ===========================================================================
 // BATCH API — multiple indicators on the same input in one call
 // ===========================================================================
@@ -1675,6 +1691,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("calculateSync",      Napi::Function::New(env, calculateSync, "calculate"));
   exports.Set("prepareFormulaSync", Napi::Function::New(env, prepareFormulaSync, "prepareFormula"));
   exports.Set("evaluatePreparedSync", Napi::Function::New(env, evaluatePreparedSync, "evaluatePrepared"));
+  exports.Set("releaseFormulaSync", Napi::Function::New(env, releaseFormulaSync, "releaseFormula"));
 
 
 
@@ -1712,6 +1729,7 @@ exports.Set("calculate",          Napi::Function::New(env, calculateAsync, "calc
   exports.Set("batch",              Napi::Function::New(env, batchAsync, "batch"));
   exports.Set("prepareFormula",     Napi::Function::New(env, prepareFormulaSync, "prepareFormula"));
   exports.Set("evaluatePrepared",   Napi::Function::New(env, evaluatePreparedSync, "evaluatePrepared"));
+  exports.Set("releaseFormula",     Napi::Function::New(env, releaseFormulaSync, "releaseFormula"));
 
   return exports;
 }

@@ -185,7 +185,7 @@ public:
   PreparedFormula(const std::string& formula,
                   const std::vector<std::string>& variables,
                   ReturnType rt)
-      : rt_(rt) {
+      : rt_(rt), varNames_(variables) {
     values_.assign(variables.size(), 0.0);
     valuePtrs_.reserve(variables.size());
     for (size_t i = 0; i < variables.size(); ++i) {
@@ -260,26 +260,42 @@ public:
   ReturnType returnType() const { return rt_; }
 
   bool evaluate(const EvalInput& in, EvalResult& out) const {
-    if (in.variables.size() != valuePtrs_.size()) return false;
-    if (in.columns.size() != valuePtrs_.size()) return false;
+    if (in.variables.size() != varNames_.size()) return false;
+    if (in.columns.size() != varNames_.size()) return false;
     if (in.candleCount == 0) return false;
     for (const auto* c : in.columns)
       if (c == nullptr) return false;
+
+    // Validate variable names and build a column map so that params can be
+    // supplied in any insertion order.  Without this, a reordering of the same
+    // keys would silently map columns to the wrong ExprTk variables.
+    std::vector<size_t> colMap(varNames_.size());
+    for (size_t v = 0; v < varNames_.size(); ++v) {
+      bool found = false;
+      for (size_t j = 0; j < in.variables.size(); ++j) {
+        if (in.variables[j] == varNames_[v]) {
+          colMap[v] = j;
+          found = true;
+          break;
+        }
+      }
+      if (!found) return false;  // variable name mismatch → reject
+    }
 
     std::lock_guard<std::mutex> lk(mtx_);
     out.type = rt_;
     if (rt_ == ReturnType::Boolean) {
       out.booleans.assign(in.candleCount, 0);
       for (size_t i = 0; i < in.candleCount; ++i) {
-        for (size_t v = 0; v < valuePtrs_.size(); ++v)
-          *valuePtrs_[v] = in.columns[v][i];
+        for (size_t v = 0; v < varNames_.size(); ++v)
+          *valuePtrs_[v] = in.columns[colMap[v]][i];
         out.booleans[i] = e_.value() != 0.0 ? 1 : 0;
       }
     } else {
       out.numbers.assign(in.candleCount, std::numeric_limits<double>::quiet_NaN());
       for (size_t i = 0; i < in.candleCount; ++i) {
-        for (size_t v = 0; v < valuePtrs_.size(); ++v)
-          *valuePtrs_[v] = in.columns[v][i];
+        for (size_t v = 0; v < varNames_.size(); ++v)
+          *valuePtrs_[v] = in.columns[colMap[v]][i];
         out.numbers[i] = e_.value();
       }
     }
@@ -288,6 +304,7 @@ public:
 
 private:
   ReturnType rt_;
+  std::vector<std::string> varNames_;
   std::vector<double> values_;
   std::vector<double*> valuePtrs_;
   exprtk::symbol_table<double> s_;
@@ -297,12 +314,15 @@ private:
 };
 
 // ─── Global registry ────────────────────────────────────────────────────────
+// Uses shared_ptr so evaluatePrepared can take a strong reference before
+// releasing the registry lock — releaseFormula can then safely erase the entry
+// without invalidating objects that in-flight evaluations are still using.
 static std::mutex& registryMutex() {
   static std::mutex m;
   return m;
 }
-static std::unordered_map<FormulaHandle, std::unique_ptr<PreparedFormula>>& registry() {
-  static std::unordered_map<FormulaHandle, std::unique_ptr<PreparedFormula>> r;
+static std::unordered_map<FormulaHandle, std::shared_ptr<PreparedFormula>>& registry() {
+  static std::unordered_map<FormulaHandle, std::shared_ptr<PreparedFormula>> r;
   return r;
 }
 static std::atomic<FormulaHandle>& nextHandleGen() {
@@ -314,21 +334,29 @@ FormulaHandle prepareFormula(const std::string& formula,
                              const std::vector<std::string>& variables,
                              ReturnType rt) {
   FormulaHandle h = nextHandleGen().fetch_add(1);
-  auto pf = std::make_unique<PreparedFormula>(formula, variables, rt);
+  auto pf = std::make_shared<PreparedFormula>(formula, variables, rt);
   std::lock_guard<std::mutex> lk(registryMutex());
   registry().emplace(h, std::move(pf));
   return h;
 }
 
 bool evaluatePrepared(FormulaHandle handle, const EvalInput& in, EvalResult& out) {
-  PreparedFormula* pf;
+  std::shared_ptr<PreparedFormula> pf;
   {
     std::lock_guard<std::mutex> lk(registryMutex());
     auto it = registry().find(handle);
     if (it == registry().end()) return false;
-    pf = it->second.get();
+    pf = it->second;  // strong ref keeps object alive after unlock
   }
   return pf->evaluate(in, out);
+}
+
+bool releaseFormula(FormulaHandle handle) {
+  std::lock_guard<std::mutex> lk(registryMutex());
+  auto it = registry().find(handle);
+  if (it == registry().end()) return false;
+  registry().erase(it);
+  return true;
 }
 
 } // namespace cfm

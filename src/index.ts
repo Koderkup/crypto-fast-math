@@ -197,6 +197,7 @@ interface NativeAddon {
   calculate(args: CalculateArgs): Promise<number[] | boolean[]>;
   prepareFormulaSync(args: CalculateArgs): number;
   evaluatePreparedSync(args: EvaluatePreparedArgs): number[] | boolean[];
+  releaseFormulaSync(handle: number): boolean;
   batchSync(args: BatchArgs): BatchResult;
   batch(args: BatchArgs): Promise<BatchResult>;
 }
@@ -647,6 +648,26 @@ export function evaluatePrepared({ handle, params }: EvaluatePreparedArgs): numb
   if (typeof params !== 'object' || params === null) throw new TypeError('params must be an object');
   for (const [name, col] of Object.entries(params)) assertArray(col, `params.${name}`);
   return native.evaluatePreparedSync({ handle, params });
+}
+
+/**
+ * Release a prepared-formula handle previously returned by `prepareFormula`.
+ *
+ * After calling this, the handle is invalid: any further `evaluatePrepared`
+ * call with it will throw `"invalid formula handle"`.  Releasing an
+ * already-released or never-existing handle returns `false`; releasing a
+ * live handle returns `true`.
+ *
+ * Evaluation and release are safe to call concurrently — the native side holds
+ * a `shared_ptr` during evaluation so a release in flight cannot free the
+ * object underneath it.
+ *
+ * @param handle  The number returned by `prepareFormula`.
+ * @returns `true` if the handle was found and freed, `false` if it was unknown.
+ */
+export function releaseFormula(handle: number): boolean {
+  if (typeof handle !== 'number') throw new TypeError('handle must be a number');
+  return native.releaseFormulaSync(handle) as boolean;
 }
 
 // ===========================================================================
