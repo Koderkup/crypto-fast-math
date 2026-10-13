@@ -890,6 +890,23 @@ against native on `Float64Array`, which flattered the native side):
 possible JS. Against *idiomatic* JS (`Array.from(closes, i => …)` ≈ 300 ms at 5M) the native formula
 engine is **~1.3–1.8× faster**; both figures appear in the summary of `node benchmark.js`.
 
+### Native vs JS — indicator-by-indicator (ratio: native typed / JS Float64; < 1 = native faster)
+
+| Indicator | n=100K | n=1M | n=5M | At 5M: native wins on complex |
+|---|---|---|---|---|
+| SMA (20) | **0.82×** | 2.06× | 5.06× | — |
+| EMA (12) | 1.07× | 1.62× | — | — |
+| RSI (14) | **0.79×** | 1.29× | 1.11× | — |
+| WMA (20) | **0.11×** | **0.44×** | — | ✅ always |
+| Volatility (26) | **0.89×** | 1.21× | — | ✅ at 100K |
+| MACD (12,26,9) | **0.91×** | 1.32× | — | ✅ at 100K |
+| Bollinger (20,2) | **0.88×** | 2.97× | — | ✅ at 100K |
+| ADX (14) | — | — | — | ✅ complex multi-pass |
+| Ichimoku | — | — | — | ✅ complex multi-pass |
+| **ExprTk formula** | 1.41× | 1.72× | **0.77×** | ✅ at 5M with prepareFormula |
+
+**Key:** `< 200K → native faster on most indicators; > 500K simple O(n) → JS wins;` complex multi-pass or formulas → native wins. **Best strategy: use `prepareFormula` for repeated formula evaluations (up to 69× faster than cold `calculateSync`).**
+
 ### How to read these numbers (5M candles)
 
 - **At 5M elements, marshalling overhead dominates.** Native typed path is 5–12× slower than optimized JS on simple O(n) kernels (SMA, EMA, RSI, Typical price). The C++ computation is fast, but copying 5M doubles across the N-API boundary twice (in + out) costs ~300–400 ms per call.
@@ -914,7 +931,7 @@ form blocks the event loop.
 | Results consumed by `Array`-only APIs (JSON, spreads) | Default `number[]` — conversion cost unavoidable there anyway. |
 
 ```bash
-node benchmark.js
+node benchmark-baseline.js
 ```
 
 ---
