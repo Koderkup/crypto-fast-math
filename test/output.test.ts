@@ -75,6 +75,22 @@ describe('Output format (output: array | typed)', () => {
     });
 
     it('converts multi-column indicators', () => {
+      const atr = cfm.atrSync(high, low, close, 5, { output: 'typed' });
+      expect(atr).to.be.instanceOf(Float64Array);
+      const adx = cfm.adxSync(high, low, close, 5, { output: 'typed' });
+      expect(adx.adx).to.be.instanceOf(Float64Array);
+    });
+
+    it('leaves scalar results untouched', () => {
+      const kelly = cfm.kellyCriterionSync(0.6, 100, 50);
+      expect(kelly).to.be.a('number');
+    });
+
+    it('leaves Uint8Array results untouched', () => {
+      const flags = cfm.bullishImpulseSync(prices);
+      expect(flags).to.be.instanceOf(Uint8Array);
+    });
+  }); // end describe('sync')
 
   describe('async', () => {
     it('returns a plain Array by default', async () => {
@@ -174,21 +190,5 @@ describe('Output format (output: array | typed)', () => {
     expect(obv).to.be.instanceOf(Float64Array);
     expect(obv).to.have.length(prices.length);
   });
-});
+}); // end describe('Output format')
 
-      const atr = cfm.atrSync(high, low, close, 5, { output: 'typed' });
-      expect(atr).to.be.instanceOf(Float64Array);
-      const adx = cfm.adxSync(high, low, close, 5, { output: 'typed' });
-      expect(adx.adx).to.be.instanceOf(Float64Array);
-    });
-
-    it('leaves scalar results untouched', () => {
-      const kelly = cfm.kellyCriterionSync(0.6, 100, 50);
-      expect(kelly).to.be.a('number');
-    });
-
-    it('leaves Uint8Array results untouched', () => {
-      const flags = cfm.bullishImpulseSync(prices);
-      expect(flags).to.be.instanceOf(Uint8Array);
-    });
-  });

@@ -20,6 +20,10 @@
 #include <limits>
 #include <exception>
 #include <cstdint>
+#include <mutex>
+#include <unordered_map>
+#include <atomic>
+#include <memory>
 
 #ifdef _WIN32
   #include <process.h>
@@ -168,6 +172,163 @@ EvalResult evaluateFormula(const std::string& formula, const EvalInput& in, Retu
     if (c == nullptr) throw std::invalid_argument("column pointer is null");
 
   return runExprTk(formula, in, rt);
+}
+
+// ─── Prepared Formula implementation ────────────────────────────────────────
+// Parse-once / eval-many: the compiled ExprTk expression tree is cached so
+// repeated evaluations skip both the per-call thread spawn and the re-parse.
+// The parser's recursive descent can overflow the V8 main-thread stack, so
+// compilation still runs on a dedicated big-stack thread; evaluation is
+// iterative and O(n) per candle, serialized by `mtx_` for thread safety.
+class PreparedFormula {
+public:
+  PreparedFormula(const std::string& formula,
+                  const std::vector<std::string>& variables,
+                  ReturnType rt)
+      : rt_(rt) {
+    values_.assign(variables.size(), 0.0);
+    valuePtrs_.reserve(variables.size());
+    for (size_t i = 0; i < variables.size(); ++i) {
+      s_.add_variable(variables[i], values_[i]);
+      valuePtrs_.push_back(&values_[i]);
+    }
+    s_.add_constants();
+    e_.register_symbol_table(s_);
+
+    struct CompileCtx {
+      PreparedFormula* self;
+      std::string formula;
+      std::exception_ptr ex;
+    };
+    CompileCtx ctx{this, formula, nullptr};
+
+#ifdef _WIN32
+    uintptr_t handle = _beginthreadex(nullptr, CFM_STACK_SIZE,
+      +[](void* arg) -> unsigned {
+        CompileCtx* ctx = static_cast<CompileCtx*>(arg);
+        try {
+          if (!ctx->self->parser_.compile(ctx->formula, ctx->self->e_)) {
+            std::string err = "ExprTk parse error: ";
+            if (ctx->self->parser_.error_count() > 0) {
+              auto er = ctx->self->parser_.get_error(0);
+              err += er.diagnostic.empty() ? "invalid expression" : er.diagnostic;
+            } else {
+              err += "invalid expression";
+            }
+            throw std::invalid_argument(err);
+          }
+        } catch (...) {
+          ctx->ex = std::current_exception();
+        }
+        return 0;
+      }, &ctx, 0, nullptr);
+    if (handle == 0) throw std::runtime_error("_beginthreadex failed");
+    WaitForSingleObject((HANDLE)handle, INFINITE);
+    CloseHandle((HANDLE)handle);
+    if (ctx.ex) std::rethrow_exception(ctx.ex);
+#else
+    pthread_t thread;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, CFM_STACK_SIZE);
+    int rc = pthread_create(&thread, &attr,
+      +[](void* arg) -> void* {
+        CompileCtx* ctx = static_cast<CompileCtx*>(arg);
+        try {
+          if (!ctx->self->parser_.compile(ctx->formula, ctx->self->e_)) {
+            std::string err = "ExprTk parse error: ";
+            if (ctx->self->parser_.error_count() > 0) {
+              auto er = ctx->self->parser_.get_error(0);
+              err += er.diagnostic.empty() ? "invalid expression" : er.diagnostic;
+            } else {
+              err += "invalid expression";
+            }
+            throw std::invalid_argument(err);
+          }
+        } catch (...) {
+          ctx->ex = std::current_exception();
+        }
+        return nullptr;
+      }, &ctx);
+    pthread_attr_destroy(&attr);
+    if (rc != 0) throw std::runtime_error("pthread_create failed");
+    pthread_join(thread, nullptr);
+    if (ctx.ex) std::rethrow_exception(ctx.ex);
+#endif
+  }
+
+  ReturnType returnType() const { return rt_; }
+
+  bool evaluate(const EvalInput& in, EvalResult& out) const {
+    if (in.variables.size() != valuePtrs_.size()) return false;
+    if (in.columns.size() != valuePtrs_.size()) return false;
+    if (in.candleCount == 0) return false;
+    for (const auto* c : in.columns)
+      if (c == nullptr) return false;
+
+    std::lock_guard<std::mutex> lk(mtx_);
+    out.type = rt_;
+    if (rt_ == ReturnType::Boolean) {
+      out.booleans.assign(in.candleCount, 0);
+      for (size_t i = 0; i < in.candleCount; ++i) {
+        for (size_t v = 0; v < valuePtrs_.size(); ++v)
+          *valuePtrs_[v] = in.columns[v][i];
+        out.booleans[i] = e_.value() != 0.0 ? 1 : 0;
+      }
+    } else {
+      out.numbers.assign(in.candleCount, std::numeric_limits<double>::quiet_NaN());
+      for (size_t i = 0; i < in.candleCount; ++i) {
+        for (size_t v = 0; v < valuePtrs_.size(); ++v)
+          *valuePtrs_[v] = in.columns[v][i];
+        out.numbers[i] = e_.value();
+      }
+    }
+    return true;
+  }
+
+private:
+  ReturnType rt_;
+  std::vector<double> values_;
+  std::vector<double*> valuePtrs_;
+  exprtk::symbol_table<double> s_;
+  exprtk::expression<double> e_;
+  exprtk::parser<double> parser_;
+  mutable std::mutex mtx_;
+};
+
+// ─── Global registry ────────────────────────────────────────────────────────
+static std::mutex& registryMutex() {
+  static std::mutex m;
+  return m;
+}
+static std::unordered_map<FormulaHandle, std::unique_ptr<PreparedFormula>>& registry() {
+  static std::unordered_map<FormulaHandle, std::unique_ptr<PreparedFormula>> r;
+  return r;
+}
+static std::atomic<FormulaHandle>& nextHandleGen() {
+  static std::atomic<FormulaHandle> g{1}; // 0 reserved for "invalid"
+  return g;
+}
+
+FormulaHandle prepareFormula(const std::string& formula,
+                             const std::vector<std::string>& variables,
+                             ReturnType rt) {
+  FormulaHandle h = nextHandleGen().fetch_add(1);
+  auto pf = std::make_unique<PreparedFormula>(formula, variables, rt);
+  std::lock_guard<std::mutex> lk(registryMutex());
+  registry().emplace(h, std::move(pf));
+  return h;
+}
+
+bool evaluatePrepared(FormulaHandle handle, const EvalInput& in, EvalResult& out) {
+  PreparedFormula* pf;
+  {
+    std::lock_guard<std::mutex> lk(registryMutex());
+    auto it = registry().find(handle);
+    if (it == registry().end()) return false;
+    pf = it->second.get();
+  }
+  return pf->evaluate(in, out);
 }
 
 } // namespace cfm

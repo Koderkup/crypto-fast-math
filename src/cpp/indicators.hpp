@@ -136,4 +136,65 @@ std::vector<double> parabolicSAR(const double* high, const double* low, size_t n
 /// Ichimoku Cloud.
 IchimokuResult ichimoku(const double* high, const double* low, const double* close, size_t n);
 
+// === Batch computation ===
+struct BatchInput {
+  const double* prices = nullptr;
+  const double* high = nullptr;
+  const double* low = nullptr;
+  const double* close = nullptr;
+  const double* volume = nullptr;
+  size_t n = 0;
+};
+
+struct BatchOutput {
+  // Single-output indicators
+  std::vector<double> sma;
+  std::vector<double> ema;
+  std::vector<double> rsi;
+  std::vector<double> wma;
+  std::vector<double> hma;
+  std::vector<double> volatility;
+  std::vector<double> momentum;
+  std::vector<double> roc;
+  std::vector<double> medianPrice;
+  std::vector<double> typicalPrice;
+  std::vector<double> obv;
+  std::vector<double> cci;
+  std::vector<double> williamsR;
+  std::vector<uint8_t> bullishImpulse;
+  std::vector<uint8_t> bearishImpulse;
+  std::vector<double> atr;
+  std::vector<double> vwap;
+  
+  // Multi-output indicators
+  MacdResult macd;
+  BbandsResult bollinger;
+  StochasticResult stochastic;
+  AdxResult adx;
+  KeltnerResult keltner;
+  DonchianResult donchian;
+  IchimokuResult ichimoku;
+  std::vector<double> parabolicSAR;
+};
+
+// Compute a batch of indicators on the same input data.
+// Only requested indicators (non-empty period/params) are computed.
+// All outputs are resized to n and filled with NaN/0 for uncomputed.
+void computeBatch(const BatchInput& in, BatchOutput& out,
+                  // Single-output with period
+                  int smaPeriod = 0, int emaPeriod = 0, int rsiPeriod = 0,
+                  int wmaPeriod = 0, int hmaPeriod = 0, int volatilityPeriod = 0,
+                  int momentumPeriod = 0, int rocPeriod = 0,
+                  int obvEnabled = 0, int cciPeriod = 0, int williamsRPeriod = 0,
+                  int atrPeriod = 0,
+                  // Multi-output
+                  int macdFast = 0, int macdSlow = 0, int macdSignal = 0,
+                  int bollingerPeriod = 0, double bollingerStdDev = 2.0,
+                  int stochasticK = 0, int stochasticD = 0,
+                  int adxPeriod = 0,
+                  int keltnerPeriod = 0, double keltnerMult = 2.0,
+                  int donchianPeriod = 0,
+                  int ichimokuEnabled = 0,
+                  int parabolicSAREnabled = 0, double psarStep = 0.02, double psarMaxStep = 0.2);
+
 } // namespace cfm

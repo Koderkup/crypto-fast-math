@@ -93,15 +93,11 @@ static Arr readArray(const Napi::Value& v, const char* argName) {
   Napi::TypeError::New(v.Env(),
     std::string("Expected '") + argName + "' to be a number or array of numbers")
       .ThrowAsJavaScriptException();
-  return out;
+    return out;
 }
 
-/// Возвращает std::vector<double> из Napi::Array (числа и null→NaN).
-static std::vector<double> vecFromArray(const Napi::Value& v, const char* name) {
-  Arr a = readArray(v, name);
-  if (v.Env().IsExceptionPending()) return {};
-  return std::move(a.data);
-}
+
+
 
 /// Copies std::vector<double> -> JS Float64Array (a single memcpy).
 ///
@@ -1148,6 +1144,123 @@ static Napi::Value calculateAsync(const Napi::CallbackInfo& info) {
   return runAsync(info, std::move(in));
 }
 
+// ─── Prepared Formula API ───────────────────────────────────────────────────
+// prepareFormulaSync({ formula, params, returnType }) -> int handle
+// Parses/compiles the formula once on a big-stack thread; the compiled
+// expression tree is cached behind an opaque integer handle.
+static Napi::Value prepareFormulaSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsObject()) {
+    Napi::TypeError::New(env, "prepareFormulaSync({ formula, params, returnType }) expected").ThrowAsJavaScriptException();
+    return env.Null();
+  }
+  auto opts = info[0].As<Napi::Object>();
+  if (!opts.Has("formula") || !opts.Get("formula").IsString()) {
+    Napi::TypeError::New(env, "options.formula (string) is required").ThrowAsJavaScriptException();
+    return env.Null();
+  }
+  std::string formula = opts.Get("formula").As<Napi::String>().Utf8Value();
+  std::string returnType;
+  if (opts.Has("returnType") && opts.Get("returnType").IsString())
+    returnType = opts.Get("returnType").As<Napi::String>().Utf8Value();
+  if (!opts.Has("params") || !opts.Get("params").IsObject()) {
+    Napi::TypeError::New(env, "options.params (object) is required").ThrowAsJavaScriptException();
+    return env.Null();
+  }
+  auto params = opts.Get("params").As<Napi::Object>();
+  auto keys = params.GetPropertyNames();
+  std::vector<std::string> varNames;
+  std::vector<std::vector<double>> varColumns;
+  for (size_t i = 0; i < keys.Length(); ++i) {
+    std::string name = keys.Get(i).As<Napi::String>().Utf8Value();
+    Arr a = readArray(params.Get(name), name.c_str());
+    if (env.IsExceptionPending()) return env.Null();
+    varNames.push_back(name);
+    varColumns.push_back(std::move(a.data));
+  }
+  if (varColumns.empty()) {
+    Napi::TypeError::New(env, "params must have at least one column").ThrowAsJavaScriptException();
+    return env.Null();
+  }
+  size_t cc = varColumns.front().size();
+  for (size_t i = 1; i < varColumns.size(); ++i) {
+    if (varColumns[i].size() != cc) {
+      Napi::TypeError::New(env, "all param columns must have equal length").ThrowAsJavaScriptException();
+      return env.Null();
+    }
+  }
+  cfm::EvalInput ein;
+  ein.variables = varNames;
+  ein.candleCount = cc;
+  for (auto& col : varColumns) ein.columns.push_back(col.data());
+  try {
+    cfm::ReturnType rt = cfm::parseReturnType(returnType, formula);
+    cfm::FormulaHandle h = cfm::prepareFormula(formula, varNames, rt);
+    return Napi::Number::New(env, h);
+  } catch (const std::exception& e) {
+    Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+    return env.Null();
+  }
+}
+
+// evaluatePreparedSync({ handle, params }) -> number[] | boolean[]
+// Reuses the cached compiled expression; no thread spawn, no re-parse.
+// params must use the same variable keys in the same insertion order as
+// prepareFormulaSync.
+static Napi::Value evaluatePreparedSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsObject()) {
+    Napi::TypeError::New(env, "evaluatePreparedSync({ handle, params }) expected").ThrowAsJavaScriptException();
+    return env.Null();
+  }
+  auto opts = info[0].As<Napi::Object>();
+  if (!opts.Has("handle") || !opts.Get("handle").IsNumber()) {
+    Napi::TypeError::New(env, "options.handle (number) is required").ThrowAsJavaScriptException();
+    return env.Null();
+  }
+  cfm::FormulaHandle h = opts.Get("handle").As<Napi::Number>().Int32Value();
+  if (!opts.Has("params") || !opts.Get("params").IsObject()) {
+    Napi::TypeError::New(env, "options.params (object) is required").ThrowAsJavaScriptException();
+    return env.Null();
+  }
+  auto params = opts.Get("params").As<Napi::Object>();
+  auto keys = params.GetPropertyNames();
+  std::vector<std::vector<double>> varColumns;
+  for (size_t i = 0; i < keys.Length(); ++i) {
+    std::string name = keys.Get(i).As<Napi::String>().Utf8Value();
+    Arr a = readArray(params.Get(name), name.c_str());
+    if (env.IsExceptionPending()) return env.Null();
+    varColumns.push_back(std::move(a.data));
+  }
+  if (varColumns.empty()) {
+    Napi::TypeError::New(env, "params must have at least one column").ThrowAsJavaScriptException();
+    return env.Null();
+  }
+  size_t cc = varColumns.front().size();
+  for (size_t i = 1; i < varColumns.size(); ++i) {
+    if (varColumns[i].size() != cc) {
+      Napi::TypeError::New(env, "all param columns must have equal length").ThrowAsJavaScriptException();
+      return env.Null();
+    }
+  }
+  cfm::EvalInput ein;
+  ein.candleCount = cc;
+  for (size_t i = 0; i < keys.Length(); ++i)
+    ein.variables.push_back(keys.Get(i).As<Napi::String>().Utf8Value());
+  for (auto& col : varColumns) ein.columns.push_back(col.data());
+  cfm::EvalResult res;
+  if (!cfm::evaluatePrepared(h, ein, res)) {
+    Napi::Error::New(env, "invalid formula handle").ThrowAsJavaScriptException();
+    return env.Null();
+  }
+  if (res.type == cfm::ReturnType::Boolean) {
+    auto arr = Napi::Array::New(env, res.booleans.size());
+    for (size_t i = 0; i < res.booleans.size(); ++i)
+      arr[i] = Napi::Boolean::New(env, res.booleans[i] != 0);
+    return arr;
+  }
+  return toF64(env, res.numbers);
+}
 
 
 
@@ -1157,6 +1270,374 @@ static Napi::Value calculateAsync(const Napi::CallbackInfo& info) {
 
 
 
+// ===========================================================================
+// BATCH API — multiple indicators on the same input in one call
+// ===========================================================================
+
+// Worker input for batch operations
+struct BatchWorkerInput {
+  std::vector<double> prices;
+  std::vector<double> high, low, close, volume;
+  // indicator flags (0 = not requested, >0 = period or enabled flag)
+  int smaPeriod, emaPeriod, rsiPeriod;
+  int wmaPeriod, hmaPeriod, volatilityPeriod;
+  int momentumPeriod, rocPeriod;
+  int cciPeriod, williamsRPeriod, atrPeriod;
+  int macdFast, macdSlow, macdSignal;
+  int bollingerPeriod; double bollingerStdDev;
+  int stochasticK, stochasticD;
+  int adxPeriod;
+  int keltnerPeriod; double keltnerMult;
+  int donchianPeriod;
+  int ichimokuEnabled;
+  int parabolicSAREnabled; double psarStep, psarMaxStep;
+  int obvEnabled;
+  bool typed = false;
+
+  BatchWorkerInput() : smaPeriod(0), emaPeriod(0), rsiPeriod(0),
+    wmaPeriod(0), hmaPeriod(0), volatilityPeriod(0),
+    momentumPeriod(0), rocPeriod(0), cciPeriod(0),
+    williamsRPeriod(0), atrPeriod(0),
+    macdFast(0), macdSlow(0), macdSignal(0),
+    bollingerPeriod(0), bollingerStdDev(2.0),
+    stochasticK(0), stochasticD(0), adxPeriod(0),
+    keltnerPeriod(0), keltnerMult(2.0), donchianPeriod(0),
+    ichimokuEnabled(0), parabolicSAREnabled(0),
+    psarStep(0.02), psarMaxStep(0.2), obvEnabled(0) {}
+};
+
+/// Parse the batch spec: { input: {...}, indicators: {...}, output: 'typed' }
+static BatchWorkerInput parseBatchArgs(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  BatchWorkerInput in;
+
+  auto opts = info[0].As<Napi::Object>();
+
+  // Check for trailing { output: 'typed' }
+  if (!opts.Has("input") || !opts.Get("input").IsObject()) {
+    Napi::TypeError::New(env, "batchSync: options.input is required").ThrowAsJavaScriptException();
+    return in;
+  }
+  if (!opts.Has("indicators") || !opts.Get("indicators").IsObject()) {
+    Napi::TypeError::New(env, "batchSync: options.indicators is required").ThrowAsJavaScriptException();
+    return in;
+  }
+
+  auto inputObj = opts.Get("input").As<Napi::Object>();
+  auto indObj = opts.Get("indicators").As<Napi::Object>();
+
+  // Read input columns
+  auto readCol = [&](const char* name, std::vector<double>& out) -> bool {
+    if (inputObj.Has(name)) {
+      Arr a = readArray(inputObj.Get(name), name);
+      if (env.IsExceptionPending()) return false;
+      out = std::move(a.data);
+    }
+    return true;
+  };
+
+  readCol("prices", in.prices);
+  if (env.IsExceptionPending()) return in;
+  readCol("high", in.high);
+  if (env.IsExceptionPending()) return in;
+  readCol("low", in.low);
+  if (env.IsExceptionPending()) return in;
+  readCol("close", in.close);
+  if (env.IsExceptionPending()) return in;
+  readCol("volume", in.volume);
+  if (env.IsExceptionPending()) return in;
+
+  // Determine n
+  size_t n = 0;
+  if (!in.prices.empty()) n = in.prices.size();
+  else if (!in.high.empty()) n = in.high.size();
+  else if (!in.low.empty()) n = in.low.size();
+  else if (!in.close.empty()) n = in.close.size();
+  else if (!in.volume.empty()) n = in.volume.size();
+
+  if (n == 0) {
+    Napi::TypeError::New(env, "batchSync: input must have at least one non-empty column").ThrowAsJavaScriptException();
+    return in;
+  }
+  // Validate equal lengths
+  auto checkLen = [&](const std::vector<double>& v, const char* name) {
+    if (!v.empty() && v.size() != n) {
+      std::string msg = std::string("input.") + name + " must have length " + std::to_string(n);
+      Napi::TypeError::New(env, msg.c_str()).ThrowAsJavaScriptException();
+    }
+  };
+  checkLen(in.prices, "prices");
+  checkLen(in.high, "high");
+  checkLen(in.low, "low");
+  checkLen(in.close, "close");
+  checkLen(in.volume, "volume");
+
+  if (env.IsExceptionPending()) return in;
+
+  // Parse indicator spec
+  auto getInt = [&](const char* key) -> int {
+    if (indObj.Has(key) && indObj.Get(key).IsNumber())
+      return indObj.Get(key).As<Napi::Number>().Int32Value();
+    return 0;
+  };
+  auto getDbl = [&](const char* key, double fallback) -> double {
+    if (indObj.Has(key) && indObj.Get(key).IsNumber())
+      return indObj.Get(key).As<Napi::Number>().DoubleValue();
+    return fallback;
+  };
+  auto has = [&](const char* key) -> bool {
+    return indObj.Has(key) && !indObj.Get(key).IsUndefined();
+  };
+
+  in.smaPeriod = getInt("sma");
+  in.emaPeriod = getInt("ema");
+  in.rsiPeriod = getInt("rsi");
+  in.wmaPeriod = getInt("wma");
+  in.hmaPeriod = getInt("hma");
+  in.volatilityPeriod = getInt("volatility");
+  in.momentumPeriod = getInt("momentum");
+  in.rocPeriod = getInt("roc");
+  in.cciPeriod = getInt("cci");
+  in.williamsRPeriod = getInt("williamsR");
+  in.atrPeriod = getInt("atr");
+  in.macdFast = getInt("macdFast");
+  in.macdSlow = getInt("macdSlow");
+  in.macdSignal = getInt("macdSignal");
+  in.bollingerPeriod = getInt("bollinger");
+  in.bollingerStdDev = getDbl("bollingerStdDev", 2.0);
+  in.stochasticK = getInt("stochasticK");
+  in.stochasticD = getInt("stochasticD");
+  in.adxPeriod = getInt("adx");
+  in.keltnerPeriod = getInt("keltner");
+  in.keltnerMult = getDbl("keltnerMult", 2.0);
+  in.donchianPeriod = getInt("donchian");
+  in.ichimokuEnabled = has("ichimoku") ? 1 : 0;
+  in.parabolicSAREnabled = has("parabolicSAR") ? 1 : 0;
+  in.obvEnabled = has("obv") ? 1 : 0;
+
+  // Check for { output: 'typed' } as second arg
+  if (info.Length() > 1 && info[1].IsObject() && !info[1].IsNull()) {
+    auto o = info[1].As<Napi::Object>();
+    if (o.Has("output") && o.Get("output").IsString()) {
+      std::string out = o.Get("output").As<Napi::String>().Utf8Value();
+      in.typed = (out == "typed");
+    }
+  }
+
+  return in;
+}
+
+/// Convert BatchOutput to a JS result object
+static Napi::Object batchResult(Napi::Env env, const cfm::BatchOutput& out, bool typed) {
+  auto obj = Napi::Object::New(env);
+
+  auto arr = [env](const std::vector<double>& v) -> Napi::Value {
+    if (v.empty()) return Napi::Array::New(env);
+    auto f64 = Napi::Float64Array::New(env, v.size());
+    std::memcpy(f64.Data(), v.data(), v.size() * sizeof(double));
+    return f64;
+  };
+
+  auto u8 = [env](const std::vector<uint8_t>& v) -> Napi::Value {
+    if (v.empty()) return Napi::Uint8Array::New(env, 0);
+    auto ta = Napi::Uint8Array::New(env, v.size());
+    std::memcpy(ta.Data(), v.data(), v.size());
+    return ta;
+  };
+
+  auto setArr = [&](const char* key, const std::vector<double>& v) {
+    if (!v.empty()) obj.Set(key, arr(v));
+  };
+  auto setU8 = [&](const char* key, const std::vector<uint8_t>& v) {
+    if (!v.empty()) obj.Set(key, u8(v));
+  };
+
+  setArr("sma", out.sma);
+  setArr("ema", out.ema);
+  setArr("rsi", out.rsi);
+  setArr("wma", out.wma);
+  setArr("hma", out.hma);
+  setArr("volatility", out.volatility);
+  setArr("momentum", out.momentum);
+  setArr("roc", out.roc);
+  setArr("medianPrice", out.medianPrice);
+  setArr("typicalPrice", out.typicalPrice);
+  setArr("obv", out.obv);
+  setArr("cci", out.cci);
+  setArr("williamsR", out.williamsR);
+  setArr("atr", out.atr);
+  setArr("vwap", out.vwap);
+  setArr("parabolicSAR", out.parabolicSAR);
+
+  setU8("bullishImpulse", out.bullishImpulse);
+  setU8("bearishImpulse", out.bearishImpulse);
+
+  // Multi-output: macd
+  if (!out.macd.macd.empty()) {
+    auto o = Napi::Object::New(env);
+    o.Set("macd", arr(out.macd.macd));
+    o.Set("signal", arr(out.macd.signal));
+    o.Set("histogram", arr(out.macd.histogram));
+    obj.Set("macd", o);
+  }
+  // bollinger
+  if (!out.bollinger.upper.empty()) {
+    auto o = Napi::Object::New(env);
+    o.Set("upper", arr(out.bollinger.upper));
+    o.Set("middle", arr(out.bollinger.middle));
+    o.Set("lower", arr(out.bollinger.lower));
+    obj.Set("bollinger", o);
+  }
+  // stochastic
+  if (!out.stochastic.k.empty()) {
+    auto o = Napi::Object::New(env);
+    o.Set("k", arr(out.stochastic.k));
+    o.Set("d", arr(out.stochastic.d));
+    obj.Set("stochastic", o);
+  }
+  // adx
+  if (!out.adx.adx.empty()) {
+    auto o = Napi::Object::New(env);
+    o.Set("adx", arr(out.adx.adx));
+    o.Set("plusDI", arr(out.adx.plusDI));
+    o.Set("minusDI", arr(out.adx.minusDI));
+    obj.Set("adx", o);
+  }
+  // keltner
+  if (!out.keltner.upper.empty()) {
+    auto o = Napi::Object::New(env);
+    o.Set("upper", arr(out.keltner.upper));
+    o.Set("middle", arr(out.keltner.middle));
+    o.Set("lower", arr(out.keltner.lower));
+    obj.Set("keltner", o);
+  }
+  // donchian
+  if (!out.donchian.upper.empty()) {
+    auto o = Napi::Object::New(env);
+    o.Set("upper", arr(out.donchian.upper));
+    o.Set("middle", arr(out.donchian.middle));
+    o.Set("lower", arr(out.donchian.lower));
+    obj.Set("donchian", o);
+  }
+  // ichimoku
+  if (!out.ichimoku.tenkan.empty()) {
+    auto o = Napi::Object::New(env);
+    o.Set("tenkan", arr(out.ichimoku.tenkan));
+    o.Set("kijun", arr(out.ichimoku.kijun));
+    o.Set("senkouA", arr(out.ichimoku.senkouA));
+    o.Set("senkouB", arr(out.ichimoku.senkouB));
+    o.Set("chikou", arr(out.ichimoku.chikou));
+    obj.Set("ichimoku", o);
+  }
+
+  return obj;
+}
+
+/// Run batch computation synchronously
+static Napi::Value runBatch(Napi::Env env, const BatchWorkerInput& in) {
+  cfm::BatchInput bin;
+  bin.n = in.prices.empty() ? (in.high.empty() ? (in.low.empty() ? (in.close.empty() ? in.volume.size() : in.close.size()) : in.low.size()) : in.high.size()) : in.prices.size();
+  bin.prices = in.prices.data();
+  bin.high = in.high.empty() ? nullptr : in.high.data();
+  bin.low = in.low.empty() ? nullptr : in.low.data();
+  bin.close = in.close.empty() ? (in.prices.empty() ? nullptr : in.prices.data()) : in.close.data();
+  bin.volume = in.volume.empty() ? nullptr : in.volume.data();
+
+  cfm::BatchOutput out;
+  cfm::computeBatch(bin, out,
+    in.smaPeriod, in.emaPeriod, in.rsiPeriod,
+    in.wmaPeriod, in.hmaPeriod, in.volatilityPeriod,
+    in.momentumPeriod, in.rocPeriod,
+    in.obvEnabled, in.cciPeriod, in.williamsRPeriod,
+    in.atrPeriod,
+    in.macdFast, in.macdSlow, in.macdSignal,
+    in.bollingerPeriod, in.bollingerStdDev,
+    in.stochasticK, in.stochasticD,
+    in.adxPeriod,
+    in.keltnerPeriod, in.keltnerMult,
+    in.donchianPeriod,
+    in.ichimokuEnabled,
+    in.parabolicSAREnabled, in.psarStep, in.psarMaxStep);
+
+  return batchResult(env, out, in.typed);
+}
+
+/// batchSync — synchronous
+static Napi::Value batchSync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsObject()) {
+    Napi::TypeError::New(env, "batchSync({ input, indicators }): expected an options object").ThrowAsJavaScriptException();
+    return env.Null();
+  }
+  BatchWorkerInput in = parseBatchArgs(info);
+  if (env.IsExceptionPending()) return env.Null();
+  return runBatch(env, in);
+}
+
+/// batch worker for async
+struct BatchWorker : public Napi::AsyncWorker {
+  BatchWorker(const Napi::Promise::Deferred& deferred, BatchWorkerInput&& in)
+    : Napi::AsyncWorker(deferred.Env(), "cfm-batch"), deferred_(deferred), input_(std::move(in)) {}
+
+  void Execute() override {
+    try {
+      cfm::BatchInput bin;
+      bin.n = input_.prices.empty() ? (input_.high.empty() ? (input_.low.empty() ? (input_.close.empty() ? input_.volume.size() : input_.close.size()) : input_.low.size()) : input_.high.size()) : input_.prices.size();
+      bin.prices = input_.prices.data();
+      bin.high = input_.high.empty() ? nullptr : input_.high.data();
+      bin.low = input_.low.empty() ? nullptr : input_.low.data();
+      bin.close = input_.close.empty() ? (input_.prices.empty() ? nullptr : input_.prices.data()) : input_.close.data();
+      bin.volume = input_.volume.empty() ? nullptr : input_.volume.data();
+
+      cfm::computeBatch(bin, output_,
+        input_.smaPeriod, input_.emaPeriod, input_.rsiPeriod,
+        input_.wmaPeriod, input_.hmaPeriod, input_.volatilityPeriod,
+        input_.momentumPeriod, input_.rocPeriod,
+        input_.obvEnabled, input_.cciPeriod, input_.williamsRPeriod,
+        input_.atrPeriod,
+        input_.macdFast, input_.macdSlow, input_.macdSignal,
+        input_.bollingerPeriod, input_.bollingerStdDev,
+        input_.stochasticK, input_.stochasticD,
+        input_.adxPeriod,
+        input_.keltnerPeriod, input_.keltnerMult,
+        input_.donchianPeriod,
+        input_.ichimokuEnabled,
+        input_.parabolicSAREnabled, input_.psarStep, input_.psarMaxStep);
+    } catch (const std::exception& e) {
+      SetError(e.what());
+    }
+  }
+
+  void OnOK() override {
+    Napi::HandleScope scope(Env());
+    deferred_.Resolve(batchResult(Env(), output_, input_.typed));
+  }
+
+  void OnError(const Napi::Error& e) override {
+    Napi::HandleScope scope(Env());
+    deferred_.Reject(e.Value());
+  }
+
+  Napi::Promise::Deferred deferred_;
+  BatchWorkerInput input_;
+  cfm::BatchOutput output_;
+};
+
+/// batchAsync — returns a Promise
+static Napi::Value batchAsync(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsObject()) {
+    Napi::TypeError::New(env, "batch({ input, indicators }): expected an options object").ThrowAsJavaScriptException();
+    return env.Null();
+  }
+  BatchWorkerInput in = parseBatchArgs(info);
+  if (env.IsExceptionPending()) return env.Null();
+
+  auto deferred = Napi::Promise::Deferred::New(env);
+  auto* w = new BatchWorker(deferred, std::move(in));
+  w->Queue();
+  return deferred.Promise();
+}
 
 // ===========================================================================
 // Module init — регистрируем sync и async версии всех методов.
@@ -1192,6 +1673,8 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("parabolicSARSync",   Napi::Function::New(env, parabolicSARSync, "parabolicSAR"));
   exports.Set("ichimokuSync",       Napi::Function::New(env, ichimokuSync, "ichimoku"));
     exports.Set("calculateSync",      Napi::Function::New(env, calculateSync, "calculate"));
+  exports.Set("prepareFormulaSync", Napi::Function::New(env, prepareFormulaSync, "prepareFormula"));
+  exports.Set("evaluatePreparedSync", Napi::Function::New(env, evaluatePreparedSync, "evaluatePrepared"));
 
 
 
@@ -1224,7 +1707,11 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
   exports.Set("roc",               Napi::Function::New(env, rocAsync, "roc"));
   exports.Set("parabolicSAR",      Napi::Function::New(env, parabolicSARAsync, "parabolicSAR"));
   exports.Set("ichimoku",          Napi::Function::New(env, ichimokuAsync, "ichimoku"));
-  exports.Set("calculate",          Napi::Function::New(env, calculateAsync, "calculate"));
+exports.Set("calculate",          Napi::Function::New(env, calculateAsync, "calculate"));
+  exports.Set("batchSync",          Napi::Function::New(env, batchSync, "batchSync"));
+  exports.Set("batch",              Napi::Function::New(env, batchAsync, "batch"));
+  exports.Set("prepareFormula",     Napi::Function::New(env, prepareFormulaSync, "prepareFormula"));
+  exports.Set("evaluatePrepared",   Napi::Function::New(env, evaluatePreparedSync, "evaluatePrepared"));
 
   return exports;
 }

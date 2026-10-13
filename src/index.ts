@@ -10,6 +10,16 @@ const addonPath = path.join(__dirname, '..');
 export interface OutputOptions {
   /** `'array'` (default) → plain `number[]`; `'typed'` → `Float64Array`. */
   output?: 'array' | 'typed';
+  /**
+   * Execution policy:
+   * - `'native'` (default) — always use the C++ addon.
+   * - `'js'` — always use the JavaScript reference implementation.
+   * - `'auto'` — pick the faster path based on input size and output mode.
+   *   For small arrays (< 4k elements) with array output, JS is faster
+   *   because marshalling dominates. For typed output and larger arrays,
+   *   native C++ is faster.
+   */
+  policy?: 'native' | 'js' | 'auto';
 }
 
 /** Options object that switches a call to zero-copy typed output. */
@@ -185,6 +195,10 @@ interface NativeAddon {
   parabolicSAR(high: NumericArray, low: NumericArray, step?: number, maxStep?: number): Promise<number[]>;
   ichimoku(high: NumericArray, low: NumericArray, close: NumericArray): Promise<IchimokuResult>;
   calculate(args: CalculateArgs): Promise<number[] | boolean[]>;
+  prepareFormulaSync(args: CalculateArgs): number;
+  evaluatePreparedSync(args: EvaluatePreparedArgs): number[] | boolean[];
+  batchSync(args: BatchArgs): BatchResult;
+  batch(args: BatchArgs): Promise<BatchResult>;
 }
 
 // ===========================================================================
@@ -197,6 +211,85 @@ export interface CalculateArgs {
   formula: string;
   params: Record<string, NumericArray>;
   returnType?: 'number' | 'boolean' | 'array' | 'auto';
+}
+
+export interface EvaluatePreparedArgs {
+  handle: number;
+  params: Record<string, NumericArray>;
+}
+
+// ===========================================================================
+// Batch API
+// ===========================================================================
+
+export interface BatchInput {
+  prices?: NumericArray;
+  high?: NumericArray;
+  low?: NumericArray;
+  close?: NumericArray;
+  volume?: NumericArray;
+}
+
+export interface BatchIndicators {
+  sma?: number;
+  ema?: number;
+  rsi?: number;
+  wma?: number;
+  hma?: number;
+  volatility?: number;
+  momentum?: number;
+  roc?: number;
+  cci?: number;
+  williamsR?: number;
+  atr?: number;
+  macdFast?: number;
+  macdSlow?: number;
+  macdSignal?: number;
+  bollinger?: number;
+  bollingerStdDev?: number;
+  stochasticK?: number;
+  stochasticD?: number;
+  adx?: number;
+  keltner?: number;
+  keltnerMult?: number;
+  donchian?: number;
+  ichimoku?: boolean;
+  parabolicSAR?: boolean;
+  obv?: boolean;
+  vwap?: boolean;
+}
+
+export interface BatchArgs {
+  input: BatchInput;
+  indicators: BatchIndicators;
+}
+
+export interface BatchResult {
+  sma?: number[] | Float64Array;
+  ema?: number[] | Float64Array;
+  rsi?: number[] | Float64Array;
+  wma?: number[] | Float64Array;
+  hma?: number[] | Float64Array;
+  volatility?: number[] | Float64Array;
+  momentum?: number[] | Float64Array;
+  roc?: number[] | Float64Array;
+  medianPrice?: number[] | Float64Array;
+  typicalPrice?: number[] | Float64Array;
+  obv?: number[] | Float64Array;
+  cci?: number[] | Float64Array;
+  williamsR?: number[] | Float64Array;
+  atr?: number[] | Float64Array;
+  vwap?: number[] | Float64Array;
+  bullishImpulse?: Uint8Array;
+  bearishImpulse?: Uint8Array;
+  macd?: MacdResult;
+  bollinger?: BollingerResult;
+  stochastic?: StochasticResult;
+  adx?: AdxResult;
+  keltner?: KeltnerResult;
+  donchian?: DonchianResult;
+  ichimoku?: IchimokuResult;
+  parabolicSAR?: number[] | Float64Array;
 }
 
 // ===========================================================================
@@ -217,6 +310,68 @@ function assertNum(v: unknown, name: string): void {
 }
 
 // ===========================================================================
+// Execution policy: 'auto' selects JS vs native based on benchmark data.
+// Crossover at ~4000 elements for SMA/EMA with array output.
+// For typed output, native is always faster (no marshalling penalty).
+// ===========================================================================
+
+const AUTO_THRESHOLD = 4000;
+
+function useJsFallback(arr: NumericArray, opts: OutputOptions | undefined): boolean {
+  const policy = opts?.policy ?? 'auto';
+  if (policy === 'js') return true;
+  if (policy === 'native') return false;
+  // 'auto': use JS for small arrays with non-typed output
+  const isTyped = opts?.output === 'typed';
+  if (isTyped) return false; // native is always faster with typed output
+  // Only use JS for clean numeric arrays (not mixed arrays with null/undefined)
+  if (!Array.isArray(arr)) {
+    // Typed arrays are always clean numeric data
+  }
+  const len = arr.length;
+  // For number[] inputs, check for nulls/undefineds
+  if (Array.isArray(arr)) {
+    for (let i = 0; i < len; i++) {
+      if (arr[i] == null) return false; // fall back to native for null/undefined
+    }
+  }
+  return len < AUTO_THRESHOLD;
+}
+
+// --- JS reference implementations (optimized, O(n)) ---
+
+function smaJs(p: NumericArray, period: number): Float64Array {
+  const n = p.length;
+  const out = new Float64Array(n);
+  out.fill(NaN);
+  if (period <= 0 || n < period) return out;
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += p[i];
+  out[period - 1] = sum / period;
+  for (let i = period; i < n; i++) {
+    sum += p[i] - p[i - period];
+    out[i] = sum / period;
+  }
+  return out;
+}
+
+function emaJs(p: NumericArray, period: number): Float64Array {
+  const n = p.length;
+  const out = new Float64Array(n);
+  out.fill(NaN);
+  if (period <= 0 || n < period) return out;
+  const alpha = 2 / (period + 1);
+  // Seed with SMA
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += p[i];
+  out[period - 1] = sum / period;
+  for (let i = period; i < n; i++) {
+    out[i] = alpha * p[i] + (1 - alpha) * out[i - 1];
+  }
+  return out;
+}
+
+// ===========================================================================
 // Sync API
 // ===========================================================================
 
@@ -226,6 +381,11 @@ export function smaSync(prices: NumericArray, period: number, opts: OutputOption
 export function smaSync(prices: NumericArray, period: number, opts?: OutputOptions): number[] | Float64Array {
   assertArray(prices, 'prices');
   assertNum(period, 'period');
+  if (useJsFallback(prices, opts)) {
+    const typed = smaJs(prices, period);
+    if (opts?.output === 'typed') return typed;
+    return toNumberArray(typed);
+  }
   return native.smaSync(prices, period, opts);
 }
 export function emaSync(prices: NumericArray, period: number): number[];
@@ -234,6 +394,11 @@ export function emaSync(prices: NumericArray, period: number, opts: OutputOption
 export function emaSync(prices: NumericArray, period: number, opts?: OutputOptions): number[] | Float64Array {
   assertArray(prices, 'prices');
   assertNum(period, 'period');
+  if (useJsFallback(prices, opts)) {
+    const typed = emaJs(prices, period);
+    if (opts?.output === 'typed') return typed;
+    return toNumberArray(typed);
+  }
   return native.emaSync(prices, period, opts);
 }
 export function rsiSync(prices: NumericArray, period: number): number[];
@@ -466,6 +631,25 @@ export function calculateSync({ formula, params, returnType = 'auto' }: Calculat
 }
 
 // ===========================================================================
+// Prepared Formula API — parse-once / eval-many for repeated-formula workloads.
+// ===========================================================================
+
+export function prepareFormula({ formula, params, returnType = 'auto' }: CalculateArgs): number {
+  if (typeof formula !== 'string') throw new TypeError('formula must be a string');
+  if (typeof params !== 'object' || params === null) throw new TypeError('params must be an object');
+  for (const [name, col] of Object.entries(params)) assertArray(col, `params.${name}`);
+  const rt = returnType as 'number' | 'boolean' | 'array' | 'auto';
+  return native.prepareFormulaSync({ formula, params, returnType: rt });
+}
+
+export function evaluatePrepared({ handle, params }: EvaluatePreparedArgs): number[] | boolean[] {
+  if (typeof handle !== 'number') throw new TypeError('handle must be a number');
+  if (typeof params !== 'object' || params === null) throw new TypeError('params must be an object');
+  for (const [name, col] of Object.entries(params)) assertArray(col, `params.${name}`);
+  return native.evaluatePreparedSync({ handle, params });
+}
+
+// ===========================================================================
 // Async API (Promises)
 // ===========================================================================
 
@@ -475,14 +659,21 @@ export function sma(prices: NumericArray, period: number, opts: OutputOptions): 
 export function sma(prices: NumericArray, period: number, opts?: OutputOptions): Promise<number[] | Float64Array> {
   assertArray(prices, 'prices');
   assertNum(period, 'period');
+  if (useJsFallback(prices, opts)) {
+    const typed = smaJs(prices, period);
+    if (opts?.output === 'typed') return Promise.resolve(typed);
+    return Promise.resolve(toNumberArray(typed));
+  }
   return native.sma(prices, period, opts);
 }
-export function ema(prices: NumericArray, period: number): Promise<number[]>;
-export function ema(prices: NumericArray, period: number, opts: TypedOutput): Promise<Float64Array>;
-export function ema(prices: NumericArray, period: number, opts: OutputOptions): Promise<number[]>;
 export function ema(prices: NumericArray, period: number, opts?: OutputOptions): Promise<number[] | Float64Array> {
   assertArray(prices, 'prices');
   assertNum(period, 'period');
+  if (useJsFallback(prices, opts)) {
+    const typed = emaJs(prices, period);
+    if (opts?.output === 'typed') return Promise.resolve(typed);
+    return Promise.resolve(toNumberArray(typed));
+  }
   return native.ema(prices, period, opts);
 }
 export function rsi(prices: NumericArray, period: number): Promise<number[]>;
@@ -689,6 +880,51 @@ export function calculate({ formula, params, returnType = 'auto' }: CalculateArg
   for (const [name, col] of Object.entries(params)) assertArray(col, `params.${name}`);
   const rt = returnType as 'number' | 'boolean' | 'array' | 'auto';
   return native.calculate({ formula, params, returnType: rt }, opts);
+}
+
+// ===========================================================================
+// Batch API — multiple indicators on the same input in one boundary crossing
+// ===========================================================================
+
+function prepareBatchInput(input: BatchInput): Record<string, unknown> {
+  const prepared: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(input)) {
+    if (val !== undefined) prepared[key] = prepareInput(val);
+  }
+  return prepared;
+}
+
+export function batchSync(args: BatchArgs): BatchResult;
+export function batchSync(args: BatchArgs, opts: TypedOutput): TypedResult<BatchResult>;
+export function batchSync(args: BatchArgs, opts?: OutputOptions): BatchResult | TypedResult<BatchResult> {
+  const { input, indicators } = args;
+  if (typeof input !== 'object' || input === null) throw new TypeError('input must be an object');
+  if (typeof indicators !== 'object' || indicators === null) throw new TypeError('indicators must be an object');
+  for (const [key, col] of Object.entries(input)) {
+    if (col !== undefined) assertArray(col, `input.${key}`);
+  }
+  const prepared = prepareBatchInput(input);
+  const typed = isTypedRequest([indicators, opts]);
+  const optsArg = typed ? opts : undefined;
+  return native.batchSync({ input: prepared, indicators }, optsArg);
+}
+
+export function batch(args: BatchArgs): Promise<BatchResult>;
+export function batch(args: BatchArgs, opts: TypedOutput): Promise<TypedResult<BatchResult>>;
+export function batch(args: BatchArgs, opts?: OutputOptions): Promise<BatchResult> | Promise<TypedResult<BatchResult>> {
+  const { input, indicators } = args;
+  if (typeof input !== 'object' || input === null) throw new TypeError('input must be an object');
+  if (typeof indicators !== 'object' || indicators === null) throw new TypeError('indicators must be an object');
+  for (const [key, col] of Object.entries(input)) {
+    if (col !== undefined) assertArray(col, `input.${key}`);
+  }
+  const prepared = prepareBatchInput(input);
+  const typed = isTypedRequest([indicators, opts]);
+  const optsArg = typed ? opts : undefined;
+  // batch native always returns typed arrays; plainify if not requested
+  const result = native.batch({ input: prepared, indicators } as BatchArgs, optsArg as OutputOptions | undefined);
+  if (typed) return result as Promise<TypedResult<BatchResult>>;
+  return (result as Promise<BatchResult>).then(plainify) as Promise<TypedResult<BatchResult>>;
 }
 
 

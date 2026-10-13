@@ -6,10 +6,41 @@
 #include <stdexcept>
 #include <limits>
 #include <cstdint>
+#include <deque>
 
 namespace cfm {
 
 static constexpr double NAN_D = std::numeric_limits<double>::quiet_NaN();
+
+// ---------------------------------------------------------------------------
+// O(n) sliding-window max/min via monotonic deque (single pass, no inner loop).
+// Output is NaN for indices < period-1, matching the window-indicator convention.
+// ---------------------------------------------------------------------------
+static std::vector<double> rollingMax(const double* v, size_t n, int period) {
+  std::vector<double> out(n, NAN_D);
+  if (period <= 0 || n < static_cast<size_t>(period)) return out;
+  std::deque<size_t> dq;
+  for (size_t i = 0; i < n; ++i) {
+    if (!dq.empty() && dq.front() <= i - static_cast<size_t>(period)) dq.pop_front();
+    while (!dq.empty() && v[dq.back()] <= v[i]) dq.pop_back();
+    dq.push_back(i);
+    if (i >= static_cast<size_t>(period - 1)) out[i] = v[dq.front()];
+  }
+  return out;
+}
+
+static std::vector<double> rollingMin(const double* v, size_t n, int period) {
+  std::vector<double> out(n, NAN_D);
+  if (period <= 0 || n < static_cast<size_t>(period)) return out;
+  std::deque<size_t> dq;
+  for (size_t i = 0; i < n; ++i) {
+    if (!dq.empty() && dq.front() <= i - static_cast<size_t>(period)) dq.pop_front();
+    while (!dq.empty() && v[dq.back()] >= v[i]) dq.pop_back();
+    dq.push_back(i);
+    if (i >= static_cast<size_t>(period - 1)) out[i] = v[dq.front()];
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Утилиты
@@ -43,20 +74,6 @@ static std::vector<double> ema_core(const double* p, size_t n, int period) {
     out[i] = prev;
   }
   return out;
-}
-
-/// Стандартное отклонение (population / N) по окну, заканчивающемуся в индексе i.
-static double stddev_window(const double* base, size_t i, int period) {
-  if (period <= 1) return 0.0;
-  double mean = 0.0;
-  for (int k = 0; k < period; ++k) mean += base[i - period + 1 + k];
-  mean /= period;
-  double var = 0.0;
-  for (int k = 0; k < period; ++k) {
-    double d = base[i - period + 1 + k] - mean;
-    var += d * d;
-  }
-  return std::sqrt(var / static_cast<double>(period));
 }
 
 // ---------------------------------------------------------------------------
@@ -114,11 +131,33 @@ MacdResult macd(const double* p, size_t n, int fastPeriod, int slowPeriod, int s
     throw std::invalid_argument("fastPeriod must be < slowPeriod");
   auto fast = ema_core(p, n, fastPeriod);
   auto slow = ema_core(p, n, slowPeriod);
-  size_t needed = static_cast<size_t>(slowPeriod);
-  for (size_t i = needed - 1; i < n; ++i) res.macd[i] = fast[i] - slow[i];
-  auto sig = ema_core(res.macd.data(), n, signalPeriod);
+  const size_t start = static_cast<size_t>(slowPeriod) - 1; // first valid macd value
+  for (size_t i = start; i < n; ++i) res.macd[i] = fast[i] - slow[i];
+
+  // Signal line = EMA(signalPeriod) of the macd line.
+  //
+  // The macd line has a leading NaN warm-up (indices < start), so seeding the
+  // EMA with the first `signalPeriod` raw values poisons the recursion: a
+  // single NaN seed makes every subsequent value NaN forever. That bug made
+  // `signal` and `histogram` all-NaN for the default (12,26,9) parameters.
+  // Fix: seed with the SMA of the first `signalPeriod` *valid* macd values —
+  // the convention used by TA-Lib. First signal value lands at index
+  // start + signalPeriod - 1 (= 33 for 12/26/9), NaN before that.
+  if (n > start) {
+    const size_t seedEnd = start + static_cast<size_t>(signalPeriod); // exclusive
+    if (seedEnd <= n) {
+      double sum = 0.0;
+      for (size_t i = start; i < seedEnd; ++i) sum += res.macd[i];
+      double prev = sum / static_cast<double>(signalPeriod);
+      res.signal[seedEnd - 1] = prev;
+      const double alpha = 2.0 / (static_cast<double>(signalPeriod) + 1.0);
+      for (size_t i = seedEnd; i < n; ++i) {
+        prev = alpha * res.macd[i] + (1.0 - alpha) * prev;
+        res.signal[i] = prev;
+      }
+    }
+  }
   for (size_t i = 0; i < n; ++i) {
-    if (!std::isnan(sig[i]) && !std::isnan(res.macd[i])) res.signal[i] = sig[i];
     if (!std::isnan(res.macd[i]) && !std::isnan(res.signal[i])) {
       res.histogram[i] = res.macd[i] - res.signal[i];
     }
@@ -132,13 +171,28 @@ BbandsResult bollinger(const double* p, size_t n, int period, double stdDev) {
   res.middle.assign(n, NAN_D);
   res.lower.assign(n, NAN_D);
   if (period <= 0) throw std::invalid_argument("period must be > 0");
-  auto mid = sma_window(p, n, period);
+  if (n < static_cast<size_t>(period)) return res;
+  // O(n) rolling sum and sum-of-squares → population stddev.
+  // var = E[X²] − E[X]², guarded against rounding (var < 0 → 0).
+  // Matches the two-pass stddev_window() within float tolerance.
+  double sum = 0.0, sumSq = 0.0;
   for (size_t i = 0; i < n; ++i) {
-    if (std::isnan(mid[i])) continue;
-    double sd = stddev_window(p, i, period);
-    res.middle[i] = mid[i];
-    res.upper[i]  = mid[i] + stdDev * sd;
-    res.lower[i]  = mid[i] - stdDev * sd;
+    sum += p[i];
+    sumSq += p[i] * p[i];
+    if (static_cast<int>(i) >= period) {
+      const double drop = p[i - period];
+      sum -= drop;
+      sumSq -= drop * drop;
+    }
+    if (static_cast<int>(i) >= period - 1) {
+      const double mean = sum / static_cast<double>(period);
+      double var = sumSq / static_cast<double>(period) - mean * mean;
+      if (var < 0.0) var = 0.0;
+      const double sd = std::sqrt(var);
+      res.middle[i] = mean;
+      res.upper[i]  = mean + stdDev * sd;
+      res.lower[i]  = mean - stdDev * sd;
+    }
   }
   return res;
 }
@@ -228,7 +282,7 @@ std::vector<uint8_t> bullishImpulse(const double* close, size_t n) {
     if (std::isnan(mc.histogram[i]) || std::isnan(mc.histogram[i - 1])) continue;
     bool emaUp = ema13[i] > ema13[i - 1];
     bool histUp = mc.histogram[i] > mc.histogram[i - 1];
-    out[i] = (emaUp || histUp) ? 1 : 0;
+    out[i] = (emaUp && histUp) ? 1 : 0;
   }
   return out;
 }
@@ -243,7 +297,7 @@ std::vector<uint8_t> bearishImpulse(const double* close, size_t n) {
     if (std::isnan(mc.histogram[i]) || std::isnan(mc.histogram[i - 1])) continue;
     bool emaDown = ema13[i] < ema13[i - 1];
     bool histDown = mc.histogram[i] < mc.histogram[i - 1];
-    out[i] = (emaDown || histDown) ? 1 : 0;
+    out[i] = (emaDown && histDown) ? 1 : 0;
   }
   return out;
 }
@@ -331,14 +385,11 @@ StochasticResult stochastic(const double* high, const double* low, const double*
   StochasticResult res;
   res.k.assign(n, NAN_D); res.d.assign(n, NAN_D);
   if (kPeriod <= 0 || dPeriod <= 0 || n < static_cast<size_t>(kPeriod)) return res;
+  auto hh = rollingMax(high, n, kPeriod);
+  auto ll = rollingMin(low, n, kPeriod);
   for (size_t i = static_cast<size_t>(kPeriod - 1); i < n; ++i) {
-    double hh = -1e300, ll = 1e300;
-    for (int j = 0; j < kPeriod; ++j) {
-      size_t idx = i - kPeriod + 1 + j;
-      hh = std::max(hh, high[idx]); ll = std::min(ll, low[idx]);
-    }
-    double range = hh - ll;
-    res.k[i] = range == 0.0 ? 0.0 : (close[i] - ll) / range * 100.0;
+    double range = hh[i] - ll[i];
+    res.k[i] = range == 0.0 ? 0.0 : (close[i] - ll[i]) / range * 100.0;
   }
   for (size_t i = static_cast<size_t>(kPeriod - 1 + dPeriod - 1); i < n; ++i) {
     double sum = 0.0; bool valid = true;
@@ -371,12 +422,22 @@ std::vector<double> obv(const double* close, const double* volume, size_t n) {
 std::vector<double> wma(const double* p, size_t n, int period) {
   std::vector<double> out(n, NAN_D);
   if (period <= 0 || n < static_cast<size_t>(period)) return out;
-  double denom = static_cast<double>(period) * (period + 1) / 2.0;
-  for (size_t i = static_cast<size_t>(period - 1); i < n; ++i) {
-    double sum = 0.0;
-    for (int j = 0; j < period; ++j)
-      sum += p[i - j] * static_cast<double>(period - j);
-    out[i] = sum / denom;
+  const double k = static_cast<double>(period);
+  const double denom = k * (k + 1.0) / 2.0;
+  // O(n) incremental WMA: rolling window sum + weighted numerator.
+  // num[i] = num[i-1] + period*p[i] - windowSum[i-1]
+  // where windowSum = sum of prices in the window (updated incrementally).
+  double windowSum = 0.0;
+  double num = 0.0;
+  for (int j = 0; j < period; ++j) {
+    windowSum += p[j];
+    num += p[j] * static_cast<double>(j + 1);
+  }
+  out[period - 1] = num / denom;
+  for (size_t i = static_cast<size_t>(period); i < n; ++i) {
+    num += k * p[i] - windowSum;
+    windowSum += p[i] - p[i - period];
+    out[i] = num / denom;
   }
   return out;
 }
@@ -417,14 +478,11 @@ std::vector<double> cci(const double* high, const double* low, const double* clo
 std::vector<double> williamsR(const double* high, const double* low, const double* close, size_t n, int period) {
   std::vector<double> out(n, NAN_D);
   if (period <= 0 || n < static_cast<size_t>(period)) return out;
+  auto hh = rollingMax(high, n, period);
+  auto ll = rollingMin(low, n, period);
   for (size_t i = static_cast<size_t>(period - 1); i < n; ++i) {
-    double hh = -1e300, ll = 1e300;
-    for (int j = 0; j < period; ++j) {
-      size_t idx = i - period + 1 + j;
-      hh = std::max(hh, high[idx]); ll = std::min(ll, low[idx]);
-    }
-    double range = hh - ll;
-    out[i] = range == 0.0 ? 0.0 : (hh - close[i]) / range * 100.0;
+    double range = hh[i] - ll[i];
+    out[i] = range == 0.0 ? 0.0 : (hh[i] - close[i]) / range * 100.0;
   }
   return out;
 }
@@ -464,15 +522,12 @@ DonchianResult donchian(const double* high, const double* low, size_t n, int per
   res.middle.assign(n, NAN_D);
   res.lower.assign(n, NAN_D);
   if (period <= 0 || n < static_cast<size_t>(period)) return res;
+  auto hh = rollingMax(high, n, period);
+  auto ll = rollingMin(low, n, period);
   for (size_t i = static_cast<size_t>(period - 1); i < n; ++i) {
-    double hh = -1e300, ll = 1e300;
-    for (int j = 0; j < period; ++j) {
-      size_t idx = i - period + 1 + j;
-      hh = std::max(hh, high[idx]); ll = std::min(ll, low[idx]);
-    }
-    res.upper[i] = hh;
-    res.lower[i] = ll;
-    res.middle[i] = (hh + ll) / 2.0;
+    res.upper[i] = hh[i];
+    res.lower[i] = ll[i];
+    res.middle[i] = (hh[i] + ll[i]) / 2.0;
   }
   return res;
 }
@@ -523,43 +578,97 @@ IchimokuResult ichimoku(const double* high, const double* low, const double* clo
   res.senkouB.assign(n, NAN_D);
   res.chikou.assign(n, NAN_D);
   const int tPeriod = 9, kPeriod = 26, sPeriod = 52;
-  // Tenkan-sen (9-period)
-  for (size_t i = static_cast<size_t>(tPeriod - 1); i < n; ++i) {
-    double hh = -1e300, ll = 1e300;
-    for (int j = 0; j < tPeriod; ++j) {
-      size_t idx = i - tPeriod + 1 + j;
-      hh = std::max(hh, high[idx]); ll = std::min(ll, low[idx]);
-    }
-    res.tenkan[i] = (hh + ll) / 2.0;
-  }
+  // Tenkan-sen (9-period) — O(n) rolling window
+  auto tenkanHH = rollingMax(high, n, tPeriod);
+  auto tenkanLL = rollingMin(low, n, tPeriod);
+  for (size_t i = static_cast<size_t>(tPeriod - 1); i < n; ++i)
+    res.tenkan[i] = (tenkanHH[i] + tenkanLL[i]) / 2.0;
   // Kijun-sen (26-period)
-  for (size_t i = static_cast<size_t>(kPeriod - 1); i < n; ++i) {
-    double hh = -1e300, ll = 1e300;
-    for (int j = 0; j < kPeriod; ++j) {
-      size_t idx = i - kPeriod + 1 + j;
-      hh = std::max(hh, high[idx]); ll = std::min(ll, low[idx]);
-    }
-    res.kijun[i] = (hh + ll) / 2.0;
-  }
+  auto kijunHH = rollingMax(high, n, kPeriod);
+  auto kijunLL = rollingMin(low, n, kPeriod);
+  for (size_t i = static_cast<size_t>(kPeriod - 1); i < n; ++i)
+    res.kijun[i] = (kijunHH[i] + kijunLL[i]) / 2.0;
   // Senkou Span A (shift 26 forward)
   for (size_t i = 25; i < n; ++i) {
     size_t target = i + 26;
     if (target < n && !std::isnan(res.tenkan[i]) && !std::isnan(res.kijun[i]))
       res.senkouA[target] = (res.tenkan[i] + res.kijun[i]) / 2.0;
   }
-  // Senkou Span B (shift 26 forward)
+  // Senkou Span B (shift 26 forward, 52-period window)
+  auto senkouBHH = rollingMax(high, n, sPeriod);
+  auto senkouBLL = rollingMin(low, n, sPeriod);
   for (size_t i = static_cast<size_t>(sPeriod - 1); i < n; ++i) {
-    double hh = -1e300, ll = 1e300;
-    for (int j = 0; j < sPeriod; ++j) {
-      size_t idx = i - sPeriod + 1 + j;
-      hh = std::max(hh, high[idx]); ll = std::min(ll, low[idx]);
-    }
     size_t target = i + 26;
-    if (target < n) res.senkouB[target] = (hh + ll) / 2.0;
+    if (target < n) res.senkouB[target] = (senkouBHH[i] + senkouBLL[i]) / 2.0;
   }
   // Chikou Span (shift 26 backward)
   for (size_t i = 26; i < n; ++i) res.chikou[i] = close[i - 26];
   return res;
+}
+
+} // namespace cfm
+
+// ===========================================================================
+// Batch computation
+// ===========================================================================
+
+namespace cfm {
+
+void computeBatch(const BatchInput& in, BatchOutput& out,
+                  int smaPeriod, int emaPeriod, int rsiPeriod,
+                  int wmaPeriod, int hmaPeriod, int volatilityPeriod,
+                  int momentumPeriod, int rocPeriod,
+                  int obvEnabled, int cciPeriod, int williamsRPeriod,
+                  int atrPeriod,
+                  int macdFast, int macdSlow, int macdSignal,
+                  int bollingerPeriod, double bollingerStdDev,
+                  int stochasticK, int stochasticD,
+                  int adxPeriod,
+                  int keltnerPeriod, double keltnerMult,
+                  int donchianPeriod,
+                  int ichimokuEnabled,
+                  int parabolicSAREnabled, double psarStep, double psarMaxStep) {
+  const size_t n = in.n;
+  if (n == 0) return;
+
+  const double* prices = in.prices ? in.prices : in.close;
+  const double* high = in.high ? in.high : prices;
+  const double* low = in.low ? in.low : prices;
+  const double* close = in.close ? in.close : prices;
+  const double* volume = in.volume;
+
+  // Single-output indicators — only allocate if requested
+  if (smaPeriod > 0) out.sma = sma(prices, n, smaPeriod);
+  if (emaPeriod > 0) out.ema = ema(prices, n, emaPeriod);
+  if (rsiPeriod > 0) out.rsi = rsi(prices, n, rsiPeriod);
+  if (wmaPeriod > 0) out.wma = wma(prices, n, wmaPeriod);
+  if (hmaPeriod > 0) out.hma = hma(prices, n, hmaPeriod);
+  if (volatilityPeriod > 0) out.volatility = volatility(prices, n, volatilityPeriod);
+  if (momentumPeriod > 0) out.momentum = momentum(prices, n, momentumPeriod);
+  if (rocPeriod > 0) out.roc = roc(prices, n, rocPeriod);
+  if (cciPeriod > 0 && high && low && close) out.cci = cci(high, low, close, n, cciPeriod);
+  if (williamsRPeriod > 0 && high && low && close) out.williamsR = williamsR(high, low, close, n, williamsRPeriod);
+  if (atrPeriod > 0 && high && low && close) out.atr = atr(high, low, close, n, atrPeriod);
+  if (bollingerPeriod > 0) out.bollinger = bollinger(prices, n, bollingerPeriod, bollingerStdDev);
+  if (stochasticK > 0 && stochasticD > 0 && high && low && close) out.stochastic = stochastic(high, low, close, n, stochasticK, stochasticD);
+  if (adxPeriod > 0 && high && low && close) out.adx = adx(high, low, close, n, adxPeriod);
+  if (keltnerPeriod > 0 && high && low && close) out.keltner = keltner(high, low, close, n, keltnerPeriod, keltnerMult);
+  if (donchianPeriod > 0 && high && low) out.donchian = donchian(high, low, n, donchianPeriod);
+  if (ichimokuEnabled && high && low && close) out.ichimoku = ichimoku(high, low, close, n);
+  if (macdFast > 0 && macdSlow > 0 && macdSignal > 0) out.macd = macd(prices, n, macdFast, macdSlow, macdSignal);
+
+  // Conditional indicators that have explicit enable flags
+  if (high && low) {
+    out.medianPrice = medianPrice(high, low, n);
+    out.typicalPrice = typicalPrice(high, low, close, n);
+  }
+  if (obvEnabled && close && volume) out.obv = obv(close, volume, n);
+  if (high && low && close) {
+    out.bullishImpulse = bullishImpulse(close, n);
+    out.bearishImpulse = bearishImpulse(close, n);
+  }
+  if (high && low && close && volume) out.vwap = vwap(high, low, close, volume, n);
+  if (parabolicSAREnabled && high && low) out.parabolicSAR = parabolicSAR(high, low, n, psarStep, psarMaxStep);
 }
 
 } // namespace cfm

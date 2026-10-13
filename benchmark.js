@@ -21,9 +21,9 @@ const { performance } = require('perf_hooks');
 const cfm = require('./dist/index.js');
 
 // ===========================================================================
-// Sample data: 100k candles
+// Sample data: 5M candles
 // ===========================================================================
-const N = 100000;
+const N = 5000000;
 const raw = Array.from({ length: N }, (_, i) => 100 + i * 0.5 + Math.sin(i) * 2);
 const prices = new Float64Array(raw);
 const highs = new Float64Array(raw.map((p) => p + 2 + Math.random()));
@@ -128,6 +128,39 @@ function jsTypicalPrice(high, low, close) {
   const out = new Array(close.length);
   for (let i = 0; i < close.length; i++) out[i] = (high[i] + low[i] + close[i]) / 3;
   return out;
+}
+
+// Complex multi-line ExprTk equivalent in JS (multiple passes, intermediate arrays)
+function jsComplexFormula(high, low, close, volume) {
+  const n = close.length;
+  
+  // Pass 1: typicalPrice = (High + Low + Close) / 3
+  const typicalPrice = new Float64Array(n);
+  for (let i = 0; i < n; i++) typicalPrice[i] = (high[i] + low[i] + close[i]) / 3;
+  
+  // Pass 2: volumeShock = (Close > typicalPrice) && (Volume > 2000) ? 1 : 0
+  const volumeShock = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    volumeShock[i] = (close[i] > typicalPrice[i] && volume[i] > 2000) ? 1 : 0;
+  }
+  
+  // Pass 3: localHigh = max of High over last 5 bars (simplified loop)
+  const localHigh = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    let maxH = high[i];
+    for (let k = 1; k < 5 && i - k >= 0; k++) {
+      if (high[i - k] > maxH) maxH = high[i - k];
+    }
+    localHigh[i] = maxH;
+  }
+  
+  // Pass 4: final signal = volumeShock && (Close > localHigh) && (sin(Close) > 0)
+  const signal = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    signal[i] = (volumeShock[i] === 1 && close[i] > localHigh[i] && Math.sin(close[i]) > 0) ? 1 : 0;
+  }
+  
+  return signal;
 }
 
 // ===========================================================================
@@ -243,6 +276,38 @@ const COMPARISONS = [
   ['WMA (20)', (s) => jsWMA(s, 20), (s, o) => cfm.wmaSync(s, 20, o)],
   ['Typical price', (s) => jsTypicalPrice(s, s, s), (s, o) => cfm.typicalPriceSync(s, s, s, o)],
 ];
+
+// Complex multi-line formula: separate comparison (uses 4 columns)
+// ExprTk uses FIXED LAGS: High[1] = previous candle, High[2] = 2 candles ago, etc.
+// Dynamic indexing like High[i] where i is a loop variable DOES NOT WORK as expected.
+const complexFormula = `
+  var typicalPrice := 0;
+  var volumeShock  := 0;
+  var localHigh    := 0;
+
+  typicalPrice := (High + Low + Close) / 3;
+
+  volumeShock := if((Close > typicalPrice) and (Volume > 2000), 1, 0);
+
+  // Fixed 5-bar window max using lag syntax: High[1] = previous candle
+  localHigh := max(High, max(High[1], max(High[2], max(High[3], High[4]))));
+
+  (volumeShock == 1) and (Close > localHigh) and (sin(Close) > 0);
+`;
+
+const complexParams = { High: highs, Low: lows, Close: closes, Volume: volumes };
+
+console.log();
+console.log('  ' + '-'.repeat(92));
+console.log('  Complex multi-line ExprTk (vars, if-else, while loop):');
+console.log('  ' + '-'.repeat(92));
+
+const jsComplexMs = time(() => jsComplexFormula(highs, lows, closes, volumes));
+const natComplexMs = time(() => cfm.calculateSync({ formula: complexFormula, params: complexParams, returnType: 'boolean' }, TYPED));
+const verdict = natComplexMs < jsComplexMs
+  ? `${(jsComplexMs / natComplexMs).toFixed(1)}x faster than JS`
+  : `${(natComplexMs / jsComplexMs).toFixed(2)}x slower than JS`;
+console.log('  ' + pad('JS (4 passes + loop)', 18) + pad(ms(jsComplexMs), 12) + pad('N/A', 16) + pad('N/A', 17) + pad(ms(natComplexMs), 13) + '  ' + verdict);
 
 for (const [name, jsFn, nativeFn] of COMPARISONS) {
   const jsArr = time(() => jsFn(raw));
