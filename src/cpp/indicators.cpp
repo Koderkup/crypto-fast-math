@@ -21,7 +21,7 @@ static std::vector<double> rollingMax(const double* v, size_t n, int period) {
   if (period <= 0 || n < static_cast<size_t>(period)) return out;
   std::deque<size_t> dq;
   for (size_t i = 0; i < n; ++i) {
-    if (!dq.empty() && dq.front() <= i - static_cast<size_t>(period)) dq.pop_front();
+    if (!dq.empty() && dq.front() + period <= i) dq.pop_front();
     while (!dq.empty() && v[dq.back()] <= v[i]) dq.pop_back();
     dq.push_back(i);
     if (i >= static_cast<size_t>(period - 1)) out[i] = v[dq.front()];
@@ -34,7 +34,7 @@ static std::vector<double> rollingMin(const double* v, size_t n, int period) {
   if (period <= 0 || n < static_cast<size_t>(period)) return out;
   std::deque<size_t> dq;
   for (size_t i = 0; i < n; ++i) {
-    if (!dq.empty() && dq.front() <= i - static_cast<size_t>(period)) dq.pop_front();
+    if (!dq.empty() && dq.front() + period <= i) dq.pop_front();
     while (!dq.empty() && v[dq.back()] >= v[i]) dq.pop_back();
     dq.push_back(i);
     if (i >= static_cast<size_t>(period - 1)) out[i] = v[dq.front()];
@@ -352,10 +352,17 @@ AdxResult adx(const double* high, const double* low, const double* close, size_t
   double atr = 0.0, pdm = 0.0, mdm = 0.0;
   for (int i = 0; i < period; ++i) { atr += tr[i]; pdm += plusDM[i]; mdm += minusDM[i]; }
   atr /= period; pdm /= period; mdm /= period;
-  res.adx[period - 1] = 0.0;
+  // DI+ and DI- start at index period-1.  ADX is undefined (NaN) until we have
+  // accumulated 'period' DX values (indices period-1 .. 2*period-2); the first
+  // valid ADX appears at 2*period-1, seeded as the SMA of those DX values, then
+  // Wilder-smoothed.
   res.plusDI[period - 1] = pdm / atr * 100.0;
   res.minusDI[period - 1] = mdm / atr * 100.0;
-  double prevDX = 0.0;
+  double diff0 = std::abs(res.plusDI[period - 1] - res.minusDI[period - 1]);
+  double sum0  = res.plusDI[period - 1] + res.minusDI[period - 1];
+  // DX[period-1] — first computable DI/DX, accumulated for ADX SMA seed
+  double dxSum = sum0 == 0.0 ? 0.0 : (diff0 / sum0) * 100.0;
+  double prevADX = 0.0;
   for (size_t i = static_cast<size_t>(period); i < n; ++i) {
     atr = (atr * (period - 1.0) + tr[i]) / period;
     pdm = (pdm * (period - 1.0) + plusDM[i]) / period;
@@ -364,8 +371,15 @@ AdxResult adx(const double* high, const double* low, const double* close, size_t
     res.plusDI[i] = pdi; res.minusDI[i] = mdi;
     double diff = std::abs(pdi - mdi), sum_ = pdi + mdi;
     double dx = sum_ == 0.0 ? 0.0 : (diff / sum_) * 100.0;
-    if (i == static_cast<size_t>(period)) { prevDX = dx; res.adx[i] = prevDX; }
-    else { prevDX = (prevDX * (period - 1.0) + dx) / period; res.adx[i] = prevDX; }
+    if (i < static_cast<size_t>(2 * period - 1)) {      // accumulate DX[period..2*period-2]
+      dxSum += dx;
+    } else if (i == static_cast<size_t>(2 * period - 1)) { // seed ADX at 2*period-1
+      prevADX = dxSum / static_cast<double>(period);
+      res.adx[i] = prevADX;
+    } else {
+      prevADX = (prevADX * (period - 1.0) + dx) / period;
+      res.adx[i] = prevADX;
+    }
   }
   return res;
 }
@@ -482,7 +496,7 @@ std::vector<double> williamsR(const double* high, const double* low, const doubl
   auto ll = rollingMin(low, n, period);
   for (size_t i = static_cast<size_t>(period - 1); i < n; ++i) {
     double range = hh[i] - ll[i];
-    out[i] = range == 0.0 ? 0.0 : (hh[i] - close[i]) / range * 100.0;
+    out[i] = range == 0.0 ? 0.0 : (hh[i] - close[i]) / range * -100.0;
   }
   return out;
 }
