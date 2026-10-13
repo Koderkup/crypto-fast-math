@@ -30,3 +30,8 @@ draft.notes
 *.txt
 .tmp-*
 test-cfm/
+tmp-npm-inspect/
+scratch/
+benchmark-baseline.js
+*.bat
+nul
