@@ -21,6 +21,7 @@ static constexpr double NAN_D = std::numeric_limits<double>::quiet_NaN();
 
 /// Считывает Double-массив из JS-значения (TypedArray / Array / number[]).
 /// Возвращает nullptr + выбрасывает Napi::Error при ошибке формата.
+/// Делает копию данных (безопасно для асинхронных вызовов в thread pool).
 struct Arr {
   std::vector<double> data;
   const double* ptr() const { return data.data(); }
@@ -28,6 +29,35 @@ struct Arr {
 };
 
 static Arr readArray(const Napi::Value& v, const char* argName);
+
+/// Zero-copy view: для Float64Array читает указатель прямо из V8 heap buffer
+/// без копирования. Для остальных типов (Array, другие TypedArray) копирует.
+/// Безопасен только для синхронных вызовов — V8 GC не может переместить
+/// буфер пока нативный код работает на главном потоке.
+struct FastInput {
+  std::vector<double> owned;       // Заполняется только для non-Float64Array путей
+  const double* data = nullptr;
+  size_t n = 0;
+
+  static FastInput fromValue(const Napi::Value& v, const char* argName, Napi::Env env) {
+    FastInput fi;
+    if (v.IsNumber()) {
+      fi.owned.push_back(v.As<Napi::Number>().DoubleValue());
+      fi.data = fi.owned.data();
+      fi.n = 1;
+    } else if (v.IsTypedArray() && v.As<Napi::TypedArray>().TypedArrayType() == napi_float64_array) {
+      auto ta = v.As<Napi::Float64Array>();
+      fi.data = ta.Data();
+      fi.n = ta.ElementLength();
+    } else {
+      Arr arr = readArray(v, argName);
+      fi.owned = std::move(arr.data);
+      fi.data = fi.owned.data();
+      fi.n = fi.owned.size();
+    }
+    return fi;
+  }
+};
 
 static Arr readArray(const Napi::Value& v, const char* argName) {
   Arr out;
@@ -121,6 +151,36 @@ static Napi::Uint8Array toUint8(Napi::Env env, const std::vector<uint8_t>& v) {
   return out;
 }
 
+/// Extracts the `target` Float64Array from the optional opts object (last argument).
+/// If present, validates that its length matches `expectedLen`.
+/// Returns an empty Float64Array if no target was provided.
+static Napi::Float64Array getTarget(const Napi::CallbackInfo& info, Napi::Env env, size_t expectedLen) {
+  if (info.Length() >= 1 && info[info.Length() - 1].IsObject()) {
+    auto opts = info[info.Length() - 1].As<Napi::Object>();
+    if (opts.Has("target") && opts.Get("target").IsTypedArray()) {
+      auto ta = opts.Get("target").As<Napi::TypedArray>();
+      if (ta.TypedArrayType() == napi_float64_array) {
+        auto f64 = ta.As<Napi::Float64Array>();
+        if (f64.ElementLength() != expectedLen) {
+          Napi::TypeError::New(env, "target buffer length must match input length").ThrowAsJavaScriptException();
+          return Napi::Float64Array();
+        }
+        return f64;
+      }
+    }
+  }
+  return Napi::Float64Array();
+}
+
+/// Writes result to target buffer if provided, otherwise allocates a new Float64Array.
+static Napi::Value finalizeArray(Napi::Env env, const std::vector<double>& res, Napi::Float64Array target) {
+  if (!target.IsEmpty()) {
+    if (!res.empty()) std::memcpy(target.Data(), res.data(), res.size() * sizeof(double));
+    return target;
+  }
+  return toF64(env, res);
+}
+
 // ===========================================================================
 // SYNC: SMA
 // ===========================================================================
@@ -130,12 +190,15 @@ static Napi::Value smaSync(const Napi::CallbackInfo& info) {
     Napi::TypeError::New(env, "smaSync(prices, period): expected 2 arguments").ThrowAsJavaScriptException();
     return env.Null();
   }
-  Arr prices = readArray(info[0], "prices");
+  FastInput prices = FastInput::fromValue(info[0], "prices", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info[1].As<Napi::Number>().Int32Value();
   try {
-    auto res = cfm::sma(prices.ptr(), prices.size(), period);
-    return toF64(env, res);
+    
+    auto res = cfm::sma(prices.data, prices.n, period);
+    auto target = getTarget(info, env, prices.n);
+    if (env.IsExceptionPending()) return env.Null();
+    return finalizeArray(env, res, target);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
     return env.Null();
@@ -147,54 +210,69 @@ static Napi::Value smaSync(const Napi::CallbackInfo& info) {
 // ===========================================================================
 static Napi::Value emaSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr p = readArray(info[0], "prices");
+  FastInput p = FastInput::fromValue(info[0], "prices", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info[1].As<Napi::Number>().Int32Value();
-  return toF64(env, cfm::ema(p.ptr(), p.size(), period));
+  auto res = cfm::ema(p.data, p.n, period);
+  auto target = getTarget(info, env, p.n);
+  if (env.IsExceptionPending()) return env.Null();
+  return finalizeArray(env, res, target);
 }
 
 static Napi::Value rsiSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr p = readArray(info[0], "prices");
+  FastInput p = FastInput::fromValue(info[0], "prices", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info[1].As<Napi::Number>().Int32Value();
-  return toF64(env, cfm::rsi(p.ptr(), p.size(), period));
+  auto res = cfm::rsi(p.data, p.n, period);
+  auto target = getTarget(info, env, p.n);
+  if (env.IsExceptionPending()) return env.Null();
+  return finalizeArray(env, res, target);
 }
 
 static Napi::Value volatilitySync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr p = readArray(info[0], "prices");
+  FastInput p = FastInput::fromValue(info[0], "prices", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info[1].As<Napi::Number>().Int32Value();
-  return toF64(env, cfm::volatility(p.ptr(), p.size(), period));
+  auto res = cfm::volatility(p.data, p.n, period);
+  auto target = getTarget(info, env, p.n);
+  if (env.IsExceptionPending()) return env.Null();
+  return finalizeArray(env, res, target);
 }
 
 static Napi::Value medianPriceSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr hi = readArray(info[0], "high");
+  FastInput hi = FastInput::fromValue(info[0], "high", env);
   if (env.IsExceptionPending()) return env.Null();
-  Arr lo = readArray(info[1], "low");
+  FastInput lo = FastInput::fromValue(info[1], "low", env);
   if (env.IsExceptionPending()) return env.Null();
-  if (hi.size() != lo.size()) {
+  if (hi.n != lo.n) {
     Napi::TypeError::New(env, "high and low must have equal length").ThrowAsJavaScriptException();
     return env.Null();
   }
-  return toF64(env, cfm::medianPrice(hi.ptr(), lo.ptr(), hi.size()));
+  auto res = cfm::medianPrice(hi.data, lo.data, hi.n);
+  auto target = getTarget(info, env, hi.n);
+  if (env.IsExceptionPending()) return env.Null();
+  return finalizeArray(env, res, target);
 }
 
 static Napi::Value typicalPriceSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr hi = readArray(info[0], "high");
+  FastInput hi = FastInput::fromValue(info[0], "high", env);
   if (env.IsExceptionPending()) return env.Null();
-  Arr lo = readArray(info[1], "low");
+  FastInput lo = FastInput::fromValue(info[1], "low", env);
   if (env.IsExceptionPending()) return env.Null();
-  Arr cl = readArray(info[2], "close");
+  FastInput cl = FastInput::fromValue(info[2], "close", env);
   if (env.IsExceptionPending()) return env.Null();
-  if (hi.size() != lo.size() || lo.size() != cl.size()) {
+  if (hi.n != lo.n || lo.n != cl.n) {
     Napi::TypeError::New(env, "high/low/close must have equal length").ThrowAsJavaScriptException();
     return env.Null();
   }
-  return toF64(env, cfm::typicalPrice(hi.ptr(), lo.ptr(), cl.ptr(), hi.size()));
+  auto res = cfm::typicalPrice(hi.data, lo.data, cl.data, hi.n);
+  auto target = getTarget(info, env, hi.n);
+  if (env.IsExceptionPending()) return env.Null();
+  return finalizeArray(env, res, target);
 }
 
 static Napi::Value kellySync(const Napi::CallbackInfo& info) {
@@ -212,13 +290,13 @@ static Napi::Value kellySync(const Napi::CallbackInfo& info) {
 
 static Napi::Value macdSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr p = readArray(info[0], "prices");
+  FastInput p = FastInput::fromValue(info[0], "prices", env);
   if (env.IsExceptionPending()) return env.Null();
   int fp = info[1].As<Napi::Number>().Int32Value();
   int sp = info[2].As<Napi::Number>().Int32Value();
   int sig = info[3].As<Napi::Number>().Int32Value();
   try {
-    auto r = cfm::macd(p.ptr(), p.size(), fp, sp, sig);
+    auto r = cfm::macd(p.data, p.n, fp, sp, sig);
     auto obj = Napi::Object::New(env);
     obj.Set("macd", toF64(env, r.macd));
     obj.Set("signal", toF64(env, r.signal));
@@ -232,13 +310,13 @@ static Napi::Value macdSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value bollingerSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr p = readArray(info[0], "prices");
+  FastInput p = FastInput::fromValue(info[0], "prices", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info[1].As<Napi::Number>().Int32Value();
   double sd = 2.0;
   if (info.Length() > 2 && !info[2].IsUndefined()) sd = info[2].As<Napi::Number>().DoubleValue();
   try {
-    auto r = cfm::bollinger(p.ptr(), p.size(), period, sd);
+    auto r = cfm::bollinger(p.data, p.n, period, sd);
     auto obj = Napi::Object::New(env);
     obj.Set("upper", toF64(env, r.upper));
     obj.Set("middle", toF64(env, r.middle));
@@ -252,30 +330,32 @@ static Napi::Value bollingerSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value bullishSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr p = readArray(info[0], "prices");
+  FastInput p = FastInput::fromValue(info[0], "prices", env);
   if (env.IsExceptionPending()) return env.Null();
-  return toUint8(env, cfm::bullishImpulse(p.ptr(), p.size()));
+  return toUint8(env, cfm::bullishImpulse(p.data, p.n));
 }
 
 static Napi::Value bearishSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr p = readArray(info[0], "prices");
+  FastInput p = FastInput::fromValue(info[0], "prices", env);
   if (env.IsExceptionPending()) return env.Null();
-  return toUint8(env, cfm::bearishImpulse(p.ptr(), p.size()));
+  return toUint8(env, cfm::bearishImpulse(p.data, p.n));
 }
 
 // === Priority 1 sync wrappers ===
 
 static Napi::Value stochasticSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr hi = readArray(info[0], "high");
-  Arr lo = readArray(info[1], "low");
-  Arr cl = readArray(info[2], "close");
+  FastInput hi = FastInput::fromValue(info[0], "high", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput lo = FastInput::fromValue(info[1], "low", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput cl = FastInput::fromValue(info[2], "close", env);
   if (env.IsExceptionPending()) return env.Null();
   int kp = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 14;
   int dp = info.Length() > 4 ? info[4].As<Napi::Number>().Int32Value() : 3;
   try {
-    auto r = cfm::stochastic(hi.ptr(), lo.ptr(), cl.ptr(), hi.size(), kp, dp);
+    auto r = cfm::stochastic(hi.data, lo.data, cl.data, hi.n, kp, dp);
     auto obj = Napi::Object::New(env);
     obj.Set("k", toF64(env, r.k));
     obj.Set("d", toF64(env, r.d));
@@ -288,14 +368,18 @@ static Napi::Value stochasticSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value atrSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr hi = readArray(info[0], "high");
-  Arr lo = readArray(info[1], "low");
-  Arr cl = readArray(info[2], "close");
+  FastInput hi = FastInput::fromValue(info[0], "high", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput lo = FastInput::fromValue(info[1], "low", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput cl = FastInput::fromValue(info[2], "close", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 14;
   try {
-    auto r = cfm::atr(hi.ptr(), lo.ptr(), cl.ptr(), hi.size(), period);
-    return toF64(env, r);
+    auto r = cfm::atr(hi.data, lo.data, cl.data, hi.n, period);
+    auto target = getTarget(info, env, hi.n);
+    if (env.IsExceptionPending()) return env.Null();
+    return finalizeArray(env, r, target);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
     return env.Null();
@@ -304,13 +388,15 @@ static Napi::Value atrSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value adxSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr hi = readArray(info[0], "high");
-  Arr lo = readArray(info[1], "low");
-  Arr cl = readArray(info[2], "close");
+  FastInput hi = FastInput::fromValue(info[0], "high", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput lo = FastInput::fromValue(info[1], "low", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput cl = FastInput::fromValue(info[2], "close", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 14;
   try {
-    auto r = cfm::adx(hi.ptr(), lo.ptr(), cl.ptr(), hi.size(), period);
+    auto r = cfm::adx(hi.data, lo.data, cl.data, hi.n, period);
     auto obj = Napi::Object::New(env);
     obj.Set("adx", toF64(env, r.adx));
     obj.Set("plusDI", toF64(env, r.plusDI));
@@ -324,14 +410,19 @@ static Napi::Value adxSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value vwapSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr hi = readArray(info[0], "high");
-  Arr lo = readArray(info[1], "low");
-  Arr cl = readArray(info[2], "close");
-  Arr vol = readArray(info[3], "volume");
+  FastInput hi = FastInput::fromValue(info[0], "high", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput lo = FastInput::fromValue(info[1], "low", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput cl = FastInput::fromValue(info[2], "close", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput vol = FastInput::fromValue(info[3], "volume", env);
   if (env.IsExceptionPending()) return env.Null();
     try {
-    auto r = cfm::vwap(hi.ptr(), lo.ptr(), cl.ptr(), vol.ptr(), hi.size());
-    return toF64(env, r);
+    auto r = cfm::vwap(hi.data, lo.data, cl.data, vol.data, hi.n);
+    auto target = getTarget(info, env, hi.n);
+    if (env.IsExceptionPending()) return env.Null();
+    return finalizeArray(env, r, target);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
     return env.Null();
@@ -342,12 +433,15 @@ static Napi::Value vwapSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value obvSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr cl = readArray(info[0], "close");
-  Arr vol = readArray(info[1], "volume");
+  FastInput cl = FastInput::fromValue(info[0], "close", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput vol = FastInput::fromValue(info[1], "volume", env);
   if (env.IsExceptionPending()) return env.Null();
   try {
-    auto r = cfm::obv(cl.ptr(), vol.ptr(), cl.size());
-    return toF64(env, r);
+    auto r = cfm::obv(cl.data, vol.data, cl.n);
+    auto target = getTarget(info, env, cl.n);
+    if (env.IsExceptionPending()) return env.Null();
+    return finalizeArray(env, r, target);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
     return env.Null();
@@ -356,11 +450,14 @@ static Napi::Value obvSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value wmaSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr p = readArray(info[0], "prices");
+  FastInput p = FastInput::fromValue(info[0], "prices", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info[1].As<Napi::Number>().Int32Value();
   try {
-    return toF64(env, cfm::wma(p.ptr(), p.size(), period));
+    auto res = cfm::wma(p.data, p.n, period);
+    auto target = getTarget(info, env, p.n);
+    if (env.IsExceptionPending()) return env.Null();
+    return finalizeArray(env, res, target);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
     return env.Null();
@@ -369,11 +466,14 @@ static Napi::Value wmaSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value hmaSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr p = readArray(info[0], "prices");
+  FastInput p = FastInput::fromValue(info[0], "prices", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info[1].As<Napi::Number>().Int32Value();
   try {
-    return toF64(env, cfm::hma(p.ptr(), p.size(), period));
+    auto res = cfm::hma(p.data, p.n, period);
+    auto target = getTarget(info, env, p.n);
+    if (env.IsExceptionPending()) return env.Null();
+    return finalizeArray(env, res, target);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
     return env.Null();
@@ -382,14 +482,18 @@ static Napi::Value hmaSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value cciSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr hi = readArray(info[0], "high");
-  Arr lo = readArray(info[1], "low");
-  Arr cl = readArray(info[2], "close");
+  FastInput hi = FastInput::fromValue(info[0], "high", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput lo = FastInput::fromValue(info[1], "low", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput cl = FastInput::fromValue(info[2], "close", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 20;
   try {
-    auto r = cfm::cci(hi.ptr(), lo.ptr(), cl.ptr(), hi.size(), period);
-    return toF64(env, r);
+    auto r = cfm::cci(hi.data, lo.data, cl.data, hi.n, period);
+    auto target = getTarget(info, env, hi.n);
+    if (env.IsExceptionPending()) return env.Null();
+    return finalizeArray(env, r, target);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
     return env.Null();
@@ -398,14 +502,18 @@ static Napi::Value cciSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value williamsRSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr hi = readArray(info[0], "high");
-  Arr lo = readArray(info[1], "low");
-  Arr cl = readArray(info[2], "close");
+  FastInput hi = FastInput::fromValue(info[0], "high", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput lo = FastInput::fromValue(info[1], "low", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput cl = FastInput::fromValue(info[2], "close", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 14;
   try {
-    auto r = cfm::williamsR(hi.ptr(), lo.ptr(), cl.ptr(), hi.size(), period);
-    return toF64(env, r);
+    auto r = cfm::williamsR(hi.data, lo.data, cl.data, hi.n, period);
+    auto target = getTarget(info, env, hi.n);
+    if (env.IsExceptionPending()) return env.Null();
+    return finalizeArray(env, r, target);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
     return env.Null();
@@ -414,11 +522,14 @@ static Napi::Value williamsRSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value momentumSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr p = readArray(info[0], "prices");
+  FastInput p = FastInput::fromValue(info[0], "prices", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info.Length() > 1 ? info[1].As<Napi::Number>().Int32Value() : 10;
   try {
-    return toF64(env, cfm::momentum(p.ptr(), p.size(), period));
+    auto res = cfm::momentum(p.data, p.n, period);
+    auto target = getTarget(info, env, p.n);
+    if (env.IsExceptionPending()) return env.Null();
+    return finalizeArray(env, res, target);
   } catch (const std::exception& e) {
         Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
     return env.Null();
@@ -429,14 +540,16 @@ static Napi::Value momentumSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value keltnerSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr hi = readArray(info[0], "high");
-  Arr lo = readArray(info[1], "low");
-  Arr cl = readArray(info[2], "close");
+  FastInput hi = FastInput::fromValue(info[0], "high", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput lo = FastInput::fromValue(info[1], "low", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput cl = FastInput::fromValue(info[2], "close", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info.Length() > 3 ? info[3].As<Napi::Number>().Int32Value() : 20;
   double mult = info.Length() > 4 ? info[4].As<Napi::Number>().DoubleValue() : 2.0;
   try {
-    auto r = cfm::keltner(hi.ptr(), lo.ptr(), cl.ptr(), hi.size(), period, mult);
+    auto r = cfm::keltner(hi.data, lo.data, cl.data, hi.n, period, mult);
     auto obj = Napi::Object::New(env);
     obj.Set("upper", toF64(env, r.upper));
     obj.Set("middle", toF64(env, r.middle));
@@ -450,12 +563,13 @@ static Napi::Value keltnerSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value donchianSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr hi = readArray(info[0], "high");
-  Arr lo = readArray(info[1], "low");
+  FastInput hi = FastInput::fromValue(info[0], "high", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput lo = FastInput::fromValue(info[1], "low", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info.Length() > 2 ? info[2].As<Napi::Number>().Int32Value() : 20;
   try {
-    auto r = cfm::donchian(hi.ptr(), lo.ptr(), hi.size(), period);
+    auto r = cfm::donchian(hi.data, lo.data, hi.n, period);
     auto obj = Napi::Object::New(env);
     obj.Set("upper", toF64(env, r.upper));
     obj.Set("middle", toF64(env, r.middle));
@@ -469,11 +583,14 @@ static Napi::Value donchianSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value rocSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr p = readArray(info[0], "prices");
+  FastInput p = FastInput::fromValue(info[0], "prices", env);
   if (env.IsExceptionPending()) return env.Null();
   int period = info.Length() > 1 ? info[1].As<Napi::Number>().Int32Value() : 10;
   try {
-    return toF64(env, cfm::roc(p.ptr(), p.size(), period));
+    auto res = cfm::roc(p.data, p.n, period);
+    auto target = getTarget(info, env, p.n);
+    if (env.IsExceptionPending()) return env.Null();
+    return finalizeArray(env, res, target);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
     return env.Null();
@@ -482,14 +599,17 @@ static Napi::Value rocSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value parabolicSARSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr hi = readArray(info[0], "high");
-  Arr lo = readArray(info[1], "low");
+  FastInput hi = FastInput::fromValue(info[0], "high", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput lo = FastInput::fromValue(info[1], "low", env);
   if (env.IsExceptionPending()) return env.Null();
   double step = info.Length() > 2 ? info[2].As<Napi::Number>().DoubleValue() : 0.02;
   double maxStep = info.Length() > 3 ? info[3].As<Napi::Number>().DoubleValue() : 0.2;
   try {
-    auto r = cfm::parabolicSAR(hi.ptr(), lo.ptr(), hi.size(), step, maxStep);
-    return toF64(env, r);
+    auto r = cfm::parabolicSAR(hi.data, lo.data, hi.n, step, maxStep);
+    auto target = getTarget(info, env, hi.n);
+    if (env.IsExceptionPending()) return env.Null();
+    return finalizeArray(env, r, target);
   } catch (const std::exception& e) {
     Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
     return env.Null();
@@ -498,12 +618,14 @@ static Napi::Value parabolicSARSync(const Napi::CallbackInfo& info) {
 
 static Napi::Value ichimokuSync(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
-  Arr hi = readArray(info[0], "high");
-  Arr lo = readArray(info[1], "low");
-  Arr cl = readArray(info[2], "close");
+  FastInput hi = FastInput::fromValue(info[0], "high", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput lo = FastInput::fromValue(info[1], "low", env);
+  if (env.IsExceptionPending()) return env.Null();
+  FastInput cl = FastInput::fromValue(info[2], "close", env);
   if (env.IsExceptionPending()) return env.Null();
   try {
-    auto r = cfm::ichimoku(hi.ptr(), lo.ptr(), cl.ptr(), hi.size());
+    auto r = cfm::ichimoku(hi.data, lo.data, cl.data, hi.n);
     auto obj = Napi::Object::New(env);
     obj.Set("tenkan", toF64(env, r.tenkan));
     obj.Set("kijun", toF64(env, r.kijun));
@@ -1261,14 +1383,6 @@ static Napi::Value evaluatePreparedSync(const Napi::CallbackInfo& info) {
   }
   return toF64(env, res.numbers);
 }
-
-
-
-
-
-
-
-
 
 // ─── releaseFormulaSync ──────────────────────────────────────────────────────
 // Frees a previously-prepared formula handle. Safe to call concurrently with

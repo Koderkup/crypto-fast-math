@@ -1,6 +1,6 @@
 {
   "name": "crypto-fast-math",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "C++-accelerated trading indicators for Node.js — SMA, RSI, MACD, Bollinger, ADX, Ichimoku + custom ExprTk formulas. Async, zero-config prebuilt binaries.",
   "keywords": [
     "trading",

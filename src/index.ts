@@ -10,20 +10,19 @@ const addonPath = path.join(__dirname, '..');
 export interface OutputOptions {
   /** `'array'` (default) → plain `number[]`; `'typed'` → `Float64Array`. */
   output?: 'array' | 'typed';
-  /**
-   * Execution policy:
-   * - `'native'` (default) — always use the C++ addon.
-   * - `'js'` — always use the JavaScript reference implementation.
-   * - `'auto'` — pick the faster path based on input size and output mode.
-   *   For small arrays (< 4k elements) with array output, JS is faster
-   *   because marshalling dominates. For typed output and larger arrays,
-   *   native C++ is faster.
-   */
+  /** Execution policy. */
   policy?: 'native' | 'js' | 'auto';
+  /** Pre-allocated Float64Array to write results into (zero-allocation mode). */
+  target?: Float64Array;
 }
 
 /** Options object that switches a call to zero-copy typed output. */
 export interface TypedOutput extends OutputOptions { output: 'typed'; }
+
+/** Options with a pre-allocated target buffer for zero-allocation output. */
+export interface TargetOptions<T extends Float64Array> extends OutputOptions {
+  target: T;
+}
 
 /** Maps a result type to its `{ output: 'typed' }` counterpart (recursively). */
 export type TypedResult<T> =
@@ -58,6 +57,14 @@ function plainify(value: unknown): unknown {
 function isTypedRequest(args: unknown[]): boolean {
   const last = args[args.length - 1];
   return last !== null && typeof last === 'object' && (last as OutputOptions).output === 'typed';
+}
+
+/** True when the last argument contains a `target` Float64Array (zero-allocation mode). */
+function isTargetRequest(args: unknown[]): boolean {
+  const last = args[args.length - 1];
+  return last !== null && typeof last === 'object' &&
+         !Array.isArray(last) && !ArrayBuffer.isView(last) &&
+         (last as OutputOptions).target instanceof Float64Array;
 }
 
 /**
@@ -107,10 +114,13 @@ function buildNative(raw: Record<string, unknown>): Record<string, NativeFn> {
     if (typeof fn !== 'function') continue;
     wrapped[name] = (...args: unknown[]): unknown => {
       const typed = isTypedRequest(args);
-      const callArgs = typed ? args.slice(0, -1) : args;
+      const target = isTargetRequest(args);
+      // For target requests, pass opts through to native so it can write directly.
+      // For typed-only (no target), strip opts — native handles output.
+      const callArgs = (typed && !target) ? args.slice(0, -1) : args;
       const prepared = callArgs.map(prepareInput);
       const result = (fn as NativeFn).apply(raw, prepared);
-      if (typed) return result;
+      if (typed || target) return result;
       return result instanceof Promise ? result.then(plainify) : plainify(result);
     };
   }
@@ -310,6 +320,21 @@ function assertNum(v: unknown, name: string): void {
   if (typeof v !== 'number') throw new TypeError(`${name} must be a number`);
 }
 
+/** Validates that all columns in a params object have equal length. */
+function validateColumnLengths(params: Record<string, NumericArray>, context: string): void {
+  const lengths: number[] = [];
+  for (const col of Object.values(params)) {
+    if (col.length !== undefined) lengths.push(col.length);
+  }
+  if (lengths.length === 0) return;
+  const first = lengths[0];
+  for (let i = 1; i < lengths.length; i++) {
+    if (lengths[i] !== first) {
+      throw new RangeError(`${context}: all param columns must have equal length`);
+    }
+  }
+}
+
 // ===========================================================================
 // Execution policy: 'auto' selects JS vs native based on benchmark data.
 // Crossover at ~4000 elements for SMA/EMA with array output.
@@ -325,6 +350,7 @@ function useJsFallback(arr: NumericArray, opts: OutputOptions | undefined): bool
   // 'auto': use JS for small arrays with non-typed output
   const isTyped = opts?.output === 'typed';
   if (isTyped) return false; // native is always faster with typed output
+  if (opts?.target) return false; // target implies typed output, native is faster
   // Only use JS for clean numeric arrays (not mixed arrays with null/undefined)
   if (!Array.isArray(arr)) {
     // Typed arrays are always clean numeric data
@@ -378,12 +404,20 @@ function emaJs(p: NumericArray, period: number): Float64Array {
 
 export function smaSync(prices: NumericArray, period: number): number[];
 export function smaSync(prices: NumericArray, period: number, opts: TypedOutput): Float64Array;
+export function smaSync<T extends Float64Array>(prices: NumericArray, period: number, opts: TargetOptions<T>): T;
 export function smaSync(prices: NumericArray, period: number, opts: OutputOptions): number[];
 export function smaSync(prices: NumericArray, period: number, opts?: OutputOptions): number[] | Float64Array {
   assertArray(prices, 'prices');
   assertNum(period, 'period');
+  if (period < 1) throw new RangeError('period must be a positive integer');
   if (useJsFallback(prices, opts)) {
     const typed = smaJs(prices, period);
+    if (opts?.target) {
+      if (opts.target.length !== typed.length)
+        throw new RangeError('target buffer length must match input length');
+      opts.target.set(typed);
+      return opts.target;
+    }
     if (opts?.output === 'typed') return typed;
     return toNumberArray(typed);
   }
@@ -391,12 +425,20 @@ export function smaSync(prices: NumericArray, period: number, opts?: OutputOptio
 }
 export function emaSync(prices: NumericArray, period: number): number[];
 export function emaSync(prices: NumericArray, period: number, opts: TypedOutput): Float64Array;
+export function emaSync<T extends Float64Array>(prices: NumericArray, period: number, opts: TargetOptions<T>): T;
 export function emaSync(prices: NumericArray, period: number, opts: OutputOptions): number[];
 export function emaSync(prices: NumericArray, period: number, opts?: OutputOptions): number[] | Float64Array {
   assertArray(prices, 'prices');
   assertNum(period, 'period');
+  if (period < 1) throw new RangeError('period must be a positive integer');
   if (useJsFallback(prices, opts)) {
     const typed = emaJs(prices, period);
+    if (opts?.target) {
+      if (opts.target.length !== typed.length)
+        throw new RangeError('target buffer length must match input length');
+      opts.target.set(typed);
+      return opts.target;
+    }
     if (opts?.output === 'typed') return typed;
     return toNumberArray(typed);
   }
@@ -404,35 +446,45 @@ export function emaSync(prices: NumericArray, period: number, opts?: OutputOptio
 }
 export function rsiSync(prices: NumericArray, period: number): number[];
 export function rsiSync(prices: NumericArray, period: number, opts: TypedOutput): Float64Array;
+export function rsiSync<T extends Float64Array>(prices: NumericArray, period: number, opts: TargetOptions<T>): T;
 export function rsiSync(prices: NumericArray, period: number, opts: OutputOptions): number[];
 export function rsiSync(prices: NumericArray, period: number, opts?: OutputOptions): number[] | Float64Array {
   assertArray(prices, 'prices');
   assertNum(period, 'period');
+  if (period < 1) throw new RangeError('period must be a positive integer');
   return native.rsiSync(prices, period, opts);
 }
 export function volatilitySync(prices: NumericArray, period: number): number[];
 export function volatilitySync(prices: NumericArray, period: number, opts: TypedOutput): Float64Array;
+export function volatilitySync<T extends Float64Array>(prices: NumericArray, period: number, opts: TargetOptions<T>): T;
 export function volatilitySync(prices: NumericArray, period: number, opts: OutputOptions): number[];
 export function volatilitySync(prices: NumericArray, period: number, opts?: OutputOptions): number[] | Float64Array {
   assertArray(prices, 'prices');
   assertNum(period, 'period');
+  if (period < 1) throw new RangeError('period must be a positive integer');
   return native.volatilitySync(prices, period, opts);
 }
 export function medianPriceSync(high: NumericArray, low: NumericArray): number[];
 export function medianPriceSync(high: NumericArray, low: NumericArray, opts: TypedOutput): Float64Array;
+export function medianPriceSync<T extends Float64Array>(high: NumericArray, low: NumericArray, opts: TargetOptions<T>): T;
 export function medianPriceSync(high: NumericArray, low: NumericArray, opts: OutputOptions): number[];
 export function medianPriceSync(high: NumericArray, low: NumericArray, opts?: OutputOptions): number[] | Float64Array {
   assertArray(high, 'high');
   assertArray(low, 'low');
+  if (high.length !== low.length)
+    throw new RangeError('high and low must have equal length');
   return native.medianPriceSync(high, low, opts);
 }
 export function typicalPriceSync(high: NumericArray, low: NumericArray, close: NumericArray): number[];
 export function typicalPriceSync(high: NumericArray, low: NumericArray, close: NumericArray, opts: TypedOutput): Float64Array;
+export function typicalPriceSync<T extends Float64Array>(high: NumericArray, low: NumericArray, close: NumericArray, opts: TargetOptions<T>): T;
 export function typicalPriceSync(high: NumericArray, low: NumericArray, close: NumericArray, opts: OutputOptions): number[];
 export function typicalPriceSync(high: NumericArray, low: NumericArray, close: NumericArray, opts?: OutputOptions): number[] | Float64Array {
   assertArray(high, 'high');
   assertArray(low, 'low');
   assertArray(close, 'close');
+  if (high.length !== low.length || low.length !== close.length)
+    throw new RangeError('high, low, and close must have equal length');
   return native.typicalPriceSync(high, low, close, opts);
 }
 export function kellyCriterionSync(winRate: number, winAvg: number, lossAvg: number): number {
@@ -446,9 +498,9 @@ export function macdSync(prices: NumericArray, fast: number, slow: number, signa
 export function macdSync(prices: NumericArray, fast: number, slow: number, signal: number, opts: OutputOptions): MacdResult;
 export function macdSync(prices: NumericArray, fast: number, slow: number, signal: number, opts?: OutputOptions): MacdResult | TypedResult<MacdResult> {
   assertArray(prices, 'prices');
-  assertNum(fast, 'fast');
-  assertNum(slow, 'slow');
-  assertNum(signal, 'signal');
+  assertNum(fast, 'fast'); assertNum(slow, 'slow'); assertNum(signal, 'signal');
+  if (fast < 1) throw new RangeError('fast must be a positive integer');
+  if (slow < 1) throw new RangeError('slow must be a positive integer');
   return native.macdSync(prices, fast, slow, signal, opts);
 }
 export function bollingerSync(prices: NumericArray, period: number, stdDev?: number): BollingerResult;
@@ -456,8 +508,8 @@ export function bollingerSync(prices: NumericArray, period: number, stdDev: numb
 export function bollingerSync(prices: NumericArray, period: number, stdDev: number | undefined, opts: OutputOptions): BollingerResult;
 export function bollingerSync(prices: NumericArray, period: number, stdDev: number = 2.0, opts?: OutputOptions): BollingerResult | TypedResult<BollingerResult> {
   assertArray(prices, 'prices');
-  assertNum(period, 'period');
-  assertNum(stdDev, 'stdDev');
+  assertNum(period, 'period'); assertNum(stdDev, 'stdDev');
+  if (period < 1) throw new RangeError('period must be a positive integer');
   return native.bollingerSync(prices, period, stdDev, opts);
 }
 export function bullishImpulseSync(prices: NumericArray): Uint8Array {
@@ -479,23 +531,30 @@ export function stochasticSync(
 ): TypedResult<StochasticResult>;
 export function stochasticSync(
   high: NumericArray, low: NumericArray, close: NumericArray,
-  kPeriod: number | undefined, dPeriod: number
- | undefined, opts: OutputOptions): StochasticResult;
+  kPeriod: number | undefined, dPeriod: number | undefined, opts: OutputOptions): StochasticResult;
 export function stochasticSync(
   high: NumericArray, low: NumericArray, close: NumericArray,
   kPeriod: number = 14, dPeriod: number = 3, opts?: OutputOptions
 ): StochasticResult | TypedResult<StochasticResult> {
   assertArray(high, 'high'); assertArray(low, 'low'); assertArray(close, 'close');
   assertNum(kPeriod, 'kPeriod'); assertNum(dPeriod, 'dPeriod');
+  if (kPeriod < 1) throw new RangeError('kPeriod must be a positive integer');
+  if (dPeriod < 1) throw new RangeError('dPeriod must be a positive integer');
+  if (high.length !== low.length || low.length !== close.length)
+    throw new RangeError('high, low, and close must have equal length');
   return native.stochasticSync(high, low, close, kPeriod, dPeriod, opts);
 }
 
 export function atrSync(high: NumericArray, low: NumericArray, close: NumericArray, period?: number): number[];
 export function atrSync(high: NumericArray, low: NumericArray, close: NumericArray, period: number | undefined, opts: TypedOutput): Float64Array;
+export function atrSync<T extends Float64Array>(high: NumericArray, low: NumericArray, close: NumericArray, period: number | undefined, opts: TargetOptions<T>): T;
 export function atrSync(high: NumericArray, low: NumericArray, close: NumericArray, period: number | undefined, opts: OutputOptions): number[];
 export function atrSync(high: NumericArray, low: NumericArray, close: NumericArray, period: number = 14, opts?: OutputOptions): number[] | Float64Array {
   assertArray(high, 'high'); assertArray(low, 'low'); assertArray(close, 'close');
   assertNum(period, 'period');
+  if (period < 1) throw new RangeError('period must be a positive integer');
+  if (high.length !== low.length || low.length !== close.length)
+    throw new RangeError('high, low, and close must have equal length');
   return native.atrSync(high, low, close, period, opts);
 }
 
@@ -510,59 +569,79 @@ export function adxSync(high: NumericArray, low: NumericArray, close: NumericArr
 
 export function vwapSync(high: NumericArray, low: NumericArray, close: NumericArray, volume: NumericArray): number[];
 export function vwapSync(high: NumericArray, low: NumericArray, close: NumericArray, volume: NumericArray, opts: TypedOutput): Float64Array;
+export function vwapSync<T extends Float64Array>(high: NumericArray, low: NumericArray, close: NumericArray, volume: NumericArray, opts: TargetOptions<T>): T;
 export function vwapSync(high: NumericArray, low: NumericArray, close: NumericArray, volume: NumericArray, opts: OutputOptions): number[];
 export function vwapSync(high: NumericArray, low: NumericArray, close: NumericArray, volume: NumericArray, opts?: OutputOptions): number[] | Float64Array {
   assertArray(high, 'high'); assertArray(low, 'low'); assertArray(close, 'close'); assertArray(volume, 'volume');
+  if (high.length !== low.length || low.length !== close.length || close.length !== volume.length)
+    throw new RangeError('high, low, close, and volume must have equal length');
   return native.vwapSync(high, low, close, volume, opts);
 }
 
 export function obvSync(prices: NumericArray, volume: NumericArray): number[];
 export function obvSync(prices: NumericArray, volume: NumericArray, opts: TypedOutput): Float64Array;
+export function obvSync<T extends Float64Array>(prices: NumericArray, volume: NumericArray, opts: TargetOptions<T>): T;
 export function obvSync(prices: NumericArray, volume: NumericArray, opts: OutputOptions): number[];
 export function obvSync(prices: NumericArray, volume: NumericArray, opts?: OutputOptions): number[] | Float64Array {
   assertArray(prices, 'prices'); assertArray(volume, 'volume');
+  if (prices.length !== volume.length)
+    throw new RangeError('prices and volume must have equal length');
   return native.obvSync(prices, volume, opts);
 }
 
 export function wmaSync(prices: NumericArray, period: number): number[];
 export function wmaSync(prices: NumericArray, period: number, opts: TypedOutput): Float64Array;
+export function wmaSync<T extends Float64Array>(prices: NumericArray, period: number, opts: TargetOptions<T>): T;
 export function wmaSync(prices: NumericArray, period: number, opts: OutputOptions): number[];
 export function wmaSync(prices: NumericArray, period: number, opts?: OutputOptions): number[] | Float64Array {
   assertArray(prices, 'prices'); assertNum(period, 'period');
+  if (period < 1) throw new RangeError('period must be a positive integer');
   return native.wmaSync(prices, period, opts);
 }
 
 export function hmaSync(prices: NumericArray, period: number): number[];
 export function hmaSync(prices: NumericArray, period: number, opts: TypedOutput): Float64Array;
+export function hmaSync<T extends Float64Array>(prices: NumericArray, period: number, opts: TargetOptions<T>): T;
 export function hmaSync(prices: NumericArray, period: number, opts: OutputOptions): number[];
 export function hmaSync(prices: NumericArray, period: number, opts?: OutputOptions): number[] | Float64Array {
   assertArray(prices, 'prices'); assertNum(period, 'period');
+  if (period < 1) throw new RangeError('period must be a positive integer');
   return native.hmaSync(prices, period, opts);
 }
 
 export function cciSync(high: NumericArray, low: NumericArray, close: NumericArray, period?: number): number[];
 export function cciSync(high: NumericArray, low: NumericArray, close: NumericArray, period: number | undefined, opts: TypedOutput): Float64Array;
+export function cciSync<T extends Float64Array>(high: NumericArray, low: NumericArray, close: NumericArray, period: number | undefined, opts: TargetOptions<T>): T;
 export function cciSync(high: NumericArray, low: NumericArray, close: NumericArray, period: number | undefined, opts: OutputOptions): number[];
 export function cciSync(high: NumericArray, low: NumericArray, close: NumericArray, period: number = 20, opts?: OutputOptions): number[] | Float64Array {
   assertArray(high, 'high'); assertArray(low, 'low'); assertArray(close, 'close');
   assertNum(period, 'period');
+  if (period < 1) throw new RangeError('period must be a positive integer');
+  if (high.length !== low.length || low.length !== close.length)
+    throw new RangeError('high, low, and close must have equal length');
   return native.cciSync(high, low, close, period, opts);
 }
 
 export function williamsRSync(high: NumericArray, low: NumericArray, close: NumericArray, period?: number): number[];
 export function williamsRSync(high: NumericArray, low: NumericArray, close: NumericArray, period: number | undefined, opts: TypedOutput): Float64Array;
+export function williamsRSync<T extends Float64Array>(high: NumericArray, low: NumericArray, close: NumericArray, period: number | undefined, opts: TargetOptions<T>): T;
 export function williamsRSync(high: NumericArray, low: NumericArray, close: NumericArray, period: number | undefined, opts: OutputOptions): number[];
 export function williamsRSync(high: NumericArray, low: NumericArray, close: NumericArray, period: number = 14, opts?: OutputOptions): number[] | Float64Array {
   assertArray(high, 'high'); assertArray(low, 'low'); assertArray(close, 'close');
   assertNum(period, 'period');
+  if (period < 1) throw new RangeError('period must be a positive integer');
+  if (high.length !== low.length || low.length !== close.length)
+    throw new RangeError('high, low, and close must have equal length');
   return native.williamsRSync(high, low, close, period, opts);
 }
 
 export function momentumSync(prices: NumericArray, period?: number): number[];
 export function momentumSync(prices: NumericArray, period: number | undefined, opts: TypedOutput): Float64Array;
+export function momentumSync<T extends Float64Array>(prices: NumericArray, period: number | undefined, opts: TargetOptions<T>): T;
 export function momentumSync(prices: NumericArray, period: number | undefined, opts: OutputOptions): number[];
 export function momentumSync(prices: NumericArray, period: number = 10, opts?: OutputOptions): number[] | Float64Array {
   assertArray(prices, 'prices'); assertNum(period, 'period');
+  if (period < 1) throw new RangeError('period must be a positive integer');
   return native.momentumSync(prices, period, opts);
 }
 
@@ -584,32 +663,43 @@ export function keltnerSync(
 ): KeltnerResult | TypedResult<KeltnerResult> {
   assertArray(high, 'high'); assertArray(low, 'low'); assertArray(close, 'close');
   assertNum(period, 'period'); assertNum(mult, 'mult');
+  if (period < 1) throw new RangeError('period must be a positive integer');
+  if (high.length !== low.length || low.length !== close.length)
+    throw new RangeError('high, low, and close must have equal length');
   return native.keltnerSync(high, low, close, period, mult, opts);
 }
 
 export function donchianSync(high: NumericArray, low: NumericArray, period?: number): DonchianResult;
 export function donchianSync(high: NumericArray, low: NumericArray, period: number | undefined, opts: TypedOutput): TypedResult<DonchianResult>;
 export function donchianSync(high: NumericArray, low: NumericArray, period: number | undefined, opts: OutputOptions): DonchianResult;
-export function donchianSync(high: NumericArray, low: NumericArray, period: number = 20, opts?: OutputOptions): DonchianResult | TypedResult<DonchianResult> {
+export function donchianSync(high: NumericArray, low: NumericArray, period = 20, opts?: OutputOptions): DonchianResult | TypedResult<DonchianResult> {
   assertArray(high, 'high'); assertArray(low, 'low');
   assertNum(period, 'period');
+  if (period < 1) throw new RangeError('period must be a positive integer');
+  if (high.length !== low.length)
+    throw new RangeError('high and low must have equal length');
   return native.donchianSync(high, low, period, opts);
 }
 
 export function rocSync(prices: NumericArray, period?: number): number[];
 export function rocSync(prices: NumericArray, period: number | undefined, opts: TypedOutput): Float64Array;
+export function rocSync<T extends Float64Array>(prices: NumericArray, period: number | undefined, opts: TargetOptions<T>): T;
 export function rocSync(prices: NumericArray, period: number | undefined, opts: OutputOptions): number[];
 export function rocSync(prices: NumericArray, period: number = 10, opts?: OutputOptions): number[] | Float64Array {
   assertArray(prices, 'prices'); assertNum(period, 'period');
+  if (period < 1) throw new RangeError('period must be a positive integer');
   return native.rocSync(prices, period, opts);
 }
 
 export function parabolicSARSync(high: NumericArray, low: NumericArray, step?: number, maxStep?: number): number[];
 export function parabolicSARSync(high: NumericArray, low: NumericArray, step: number | undefined, maxStep: number | undefined, opts: TypedOutput): Float64Array;
+export function parabolicSARSync<T extends Float64Array>(high: NumericArray, low: NumericArray, step: number | undefined, maxStep: number | undefined, opts: TargetOptions<T>): T;
 export function parabolicSARSync(high: NumericArray, low: NumericArray, step: number | undefined, maxStep: number | undefined, opts: OutputOptions): number[];
 export function parabolicSARSync(high: NumericArray, low: NumericArray, step: number = 0.02, maxStep: number = 0.2, opts?: OutputOptions): number[] | Float64Array {
   assertArray(high, 'high'); assertArray(low, 'low');
   assertNum(step, 'step'); assertNum(maxStep, 'maxStep');
+  if (high.length !== low.length)
+    throw new RangeError('high and low must have equal length');
   return native.parabolicSARSync(high, low, step, maxStep, opts);
 }
 
@@ -617,16 +707,22 @@ export function ichimokuSync(high: NumericArray, low: NumericArray, close: Numer
 export function ichimokuSync(high: NumericArray, low: NumericArray, close: NumericArray, opts: TypedOutput): TypedResult<IchimokuResult>;
 export function ichimokuSync(high: NumericArray, low: NumericArray, close: NumericArray, opts: OutputOptions): IchimokuResult;
 export function ichimokuSync(high: NumericArray, low: NumericArray, close: NumericArray, opts?: OutputOptions): IchimokuResult | TypedResult<IchimokuResult> {
-  assertArray(high, 'high'); assertArray(low, 'low'); assertArray(close, 'close');
+  assertArray(high, 'high');
+  assertArray(low, 'low');
+  assertArray(close, 'close');
+  if (high.length !== low.length || low.length !== close.length)
+    throw new RangeError('high, low, and close must have equal length');
   return native.ichimokuSync(high, low, close, opts);
 }
 export function calculateSync(args: CalculateArgs): number[] | boolean[];
 export function calculateSync(args: CalculateArgs, opts: TypedOutput): TypedResult<number[] | boolean[]>;
+export function calculateSync<T extends Float64Array>(args: CalculateArgs, opts: TargetOptions<T>): T;
 export function calculateSync(args: CalculateArgs, opts: OutputOptions): number[] | boolean[];
 export function calculateSync({ formula, params, returnType = 'auto' }: CalculateArgs, opts?: OutputOptions): number[] | boolean[] | TypedResult<number[] | boolean[]> {
   if (typeof formula !== 'string') throw new TypeError('formula must be a string');
   if (typeof params !== 'object' || params === null) throw new TypeError('params must be an object');
   for (const [name, col] of Object.entries(params)) assertArray(col, `params.${name}`);
+  validateColumnLengths(params, 'calculateSync');
   const rt = returnType as 'number' | 'boolean' | 'array' | 'auto';
   return native.calculateSync({ formula, params, returnType: rt }, opts);
 }
@@ -639,6 +735,7 @@ export function prepareFormula({ formula, params, returnType = 'auto' }: Calcula
   if (typeof formula !== 'string') throw new TypeError('formula must be a string');
   if (typeof params !== 'object' || params === null) throw new TypeError('params must be an object');
   for (const [name, col] of Object.entries(params)) assertArray(col, `params.${name}`);
+  validateColumnLengths(params, 'prepareFormula');
   const rt = returnType as 'number' | 'boolean' | 'array' | 'auto';
   return native.prepareFormulaSync({ formula, params, returnType: rt });
 }
@@ -647,6 +744,7 @@ export function evaluatePrepared({ handle, params }: EvaluatePreparedArgs): numb
   if (typeof handle !== 'number') throw new TypeError('handle must be a number');
   if (typeof params !== 'object' || params === null) throw new TypeError('params must be an object');
   for (const [name, col] of Object.entries(params)) assertArray(col, `params.${name}`);
+  validateColumnLengths(params, 'evaluatePrepared');
   return native.evaluatePreparedSync({ handle, params });
 }
 
