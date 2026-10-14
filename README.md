@@ -8,8 +8,8 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 
 **High-performance trading & crypto math for Node.js.** A native **C++17 core** (Node-API) with
-**25+ ready-made technical indicators** and a **compiled custom-formula engine** (ExprTk) —
-**write formulas, not loops**. Zero-config install: a prebuilt binary when one matches your
+**25+ ready-made technical indicators** and a **compiled custom-formula engine (ExprTk) — **
+**write formulas, not loops**. **AVX2-vectorized** kernels on x86-64. Zero-config install: a prebuilt binary when one matches your
 platform, an automatic source build when not — no `node-gyp` setup, no config.
 
 ```ts

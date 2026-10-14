@@ -41,7 +41,8 @@
                         "/Zc:__cplusplus",
                         "/std:c++17",
                         "/GR",
-                        "/EHsc"
+                        "/EHsc",
+                        "/arch:AVX2"
                     ]
                 }
             },
@@ -51,6 +52,12 @@
                     "defines": ["_HAS_EXCEPTIONS=1"],
                     "cflags_cc": ["/GR", "/EHsc"],
                     "cflags_cc!": ["/GR-", "/EHs-c-", "-fno-rtti", "-fno-exceptions"]
+                }],
+                ["OS==\"linux\"", {
+                    "cflags_cc": ["-mavx2"]
+                }],
+                ["OS==\"mac\" and target_arch==\"x64\"", {
+                    "cflags_cc": ["-mavx2"]
                 }]
             ]
         }
