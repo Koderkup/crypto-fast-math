@@ -7,7 +7,7 @@ Include every `std` header you use explicitly — MSVC transitively includes man
 (e.g. `<memory>`) that GCC/Clang do **not**. A build that passes on Windows can fail on CI.
 
 | Type used | Required include |
-|-----------|-----------------|
+| ----------- | ----------------- |
 | `std::unique_ptr`, `std::make_unique` | `<memory>` |
 | `std::mutex`, `std::lock_guard` | `<mutex>` |
 | `std::unordered_map` | `<unordered_map>` |

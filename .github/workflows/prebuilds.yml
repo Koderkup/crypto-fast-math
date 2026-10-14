@@ -14,6 +14,7 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
@@ -21,41 +22,80 @@ jobs:
           - os: windows-2022
             target: win32-x64
             node_arch: x64
+            container: ''
+            prebuild_path: prebuilds/win32-x64/crypto-fast-math.node
           - os: ubuntu-latest
             target: linux-x64
             node_arch: x64
+            container: ''
+            prebuild_path: prebuilds/linux-x64/crypto-fast-math.node
           - os: ubuntu-24.04-arm
             target: linux-arm64
             node_arch: arm64
-          # macos-13 (Intel) is retired. Build darwin-x64 on macos-14 by
-          # installing the x64 build of Node.js — macOS runs it under
-          # Rosetta 2 transparently, and process.arch === 'x64', which is
-          # what prebuildify needs to emit prebuilds/darwin-x64/.
+            container: ''
+            prebuild_path: prebuilds/linux-arm64/crypto-fast-math.node
+          # macOS builds
           - os: macos-14
             target: darwin-x64
             node_arch: x64
+            container: ''
+            prebuild_path: prebuilds/darwin-x64/crypto-fast-math.node
           - os: macos-14
             target: darwin-arm64
             node_arch: arm64
+            container: ''
+            prebuild_path: prebuilds/darwin-arm64/crypto-fast-math.node
+          # Alpine Linux (musl) builds — for Alpine-based containers.
+          # node-gyp-build has NO linuxmusl-* directory: it resolves
+          # prebuilds/linux-<arch>/ via process.platform and selects the libc
+          # by filename tag, so prebuildify runs with --tag-libc and the musl
+          # binary lands next to the glibc one as crypto-fast-math.musl.node.
+          - os: ubuntu-latest
+            target: linuxmusl-x64
+            node_arch: x64
+            container: 'node:22-alpine'
+            prebuild_path: prebuilds/linux-x64/crypto-fast-math.musl.node
+          - os: ubuntu-24.04-arm
+            target: linuxmusl-arm64
+            node_arch: arm64
+            container: 'node:22-alpine'
+            prebuild_path: prebuilds/linux-arm64/crypto-fast-math.musl.node
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Setup Node.js
+      - name: Setup Node.js (unless container)
+        if: ${{ !matrix.container }}
         uses: actions/setup-node@v4
         with:
           node-version: 22
           architecture: ${{ matrix.node_arch }}
+      - name: Install build dependencies (Alpine container)
+        if: ${{ matrix.container }}
+        run: |
+          apk add --no-cache make g++ python3 git
+          echo "=== Alpine build diagnostics ==="
+          node --version
+          npm --version
+          make --version | head -1
+          g++ --version | head -1
+          python3 --version
+          echo "=== node-gyp config ==="
+          npx node-gyp --version
       - name: Install dependencies
         run: npm ci --ignore-scripts
       - name: Build addon and prebuilds
+        if: ${{ !matrix.container }}
         run: npm run prebuild
+      - name: Build addon and prebuilds (Alpine — tag musl libc)
+        if: ${{ matrix.container }}
+        run: npm run build:cpp && npx prebuildify --napi --strip --pre-existing --tag-libc
       - name: Verify this platform's binary
         run: node scripts/check-prebuilds.js ${{ matrix.target }}
       - name: Upload prebuild
         uses: actions/upload-artifact@v4
         with:
           name: prebuilds-${{ matrix.target }}
-          path: prebuilds/${{ matrix.target }}/crypto-fast-math.node
+          path: ${{ matrix.prebuild_path }}
           if-no-files-found: error
 
   publish:
@@ -92,7 +132,9 @@ jobs:
           mkdir -p prebuilds
           for dir in merged/prebuilds-*/; do
             echo "--- processing: $dir"
-            target=$(basename "$dir" | sed 's/^prebuilds-//')
+            # linuxmusl-* artifacts contain the .musl.node file that lives in
+            # the plain linux-<arch>/ directory, so map the name accordingly.
+            target=$(basename "$dir" | sed -e 's/^prebuilds-//' -e 's/^linuxmusl-/linux-/')
             mkdir -p "prebuilds/$target"
             find "$dir" -name "*.node" -exec cp -v {} "prebuilds/$target/" \;
           done

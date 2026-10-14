@@ -8,7 +8,7 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 
 **High-performance trading & crypto math for Node.js.** A native **C++17 core** (Node-API) with
-**25+ ready-made technical indicators** and a **compiled custom-formula engine (ExprTk) — **
+**25+ ready-made technical indicators** and a **compiled custom-formula engine (ExprTk) —**
 **write formulas, not loops**. **AVX2-vectorized** kernels on x86-64. Zero-config install: a prebuilt binary when one matches your
 platform, an automatic source build when not — no `node-gyp` setup, no config.
 
@@ -54,6 +54,7 @@ const x   = cfm.calculateSync({                            // your own formula
 ## Why crypto-fast-math?
 
 > **TL;DR** — You don't need this for "SMA is 2× faster". You need it when:
+>
 > - **Event loop must not freeze** — async API offloads to libuv thread pool, your WebSocket/HTTP handlers stay responsive
 > - **Strategies come from config/DB** — `calculate({formula, params})` parses once, evaluates at C++ speed, no `new Function` JIT loss
 > - **GC pauses kill latency** — `{ output: 'typed' }` returns `Float64Array` via single `memcpy`, zero JS allocations
@@ -62,7 +63,7 @@ const x   = cfm.calculateSync({                            // your own formula
 > On raw throughput: **< 200k candles → native wins**; **> 500k simple O(n) → JS tight loops win**; **complex multi-pass (ADX, Ichimoku) → native wins**. See [Performance](#performance).
 
 | | |
-|---|---|
+| --- | --- |
 | ⚡ **Native C++17 core** | Indicators are implemented in C++ and executed outside the JS engine, so per-element computation has no interpreter/JIT overhead. |
 | 🧮 **Write formulas, not loops** | Describe any rule once — `'Close > EMA50 and RSI < 30'` — and [ExprTk](https://github.com/ArashPartow/exprtk) **compiles it once** and evaluates it per candle inside the C++ core. At < 100k candles: 1.0–1.6× faster than idiomatic JS; at > 500k: JS tight loops win on raw speed. The win is **you never write the loop** + dynamic runtime formulas. See [Performance](#performance). |
 | 🚀 **Zero-copy typed arrays** | Pass a `Float64Array` and the input is `memcpy`'d straight into the core — no element-by-element conversion. |
@@ -78,14 +79,14 @@ const x   = cfm.calculateSync({                            // your own formula
 Developers always ask: "Why this over X?" — here's the answer.
 
 | Feature / Criterion | **crypto-fast-math** | `talib` (node bindings) | `technicalindicators` (pure JS) |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Install** | 🟢 Zero-config prebuilds (`npm install` works everywhere) | 🔴 Requires `node-gyp`, Python, TA-Lib C lib, compiler toolchain | 🟢 Easy (pure JS) |
 | **Custom formulas** | 🟢 **ExprTk engine** — `(High-Low)/Close*Volume` from config/DB | 🔴 Hard-coded indicators only | 🔴 Hard-coded indicators only |
 | **Async / non-blocking** | 🟢 Native `Promise` API on libuv thread pool | 🔴 Sync only (blocks event loop) | 🔴 Sync only |
 | **Zero-copy `Float64Array`** | 🟢 `{ output: 'typed' }` — no GC pressure | 🔴 Always copies to JS arrays | 🔴 Always creates JS arrays |
 | **100k+ candles throughput** | 🟢 Native faster on complex indicators (WMA, ADX, Ichimoku); JS faster on simple O(n) at >500k | 🟡 Fast C core but old C-API overhead | 🔴 JIT/GC limits at scale |
 | **TypeScript** | 🟢 First-class declarations | 🟡 Community types (often outdated) | 🟢 Good types |
-| **Alpine / musl Linux** | ⚠️ Fallback compile (documented) | 🔴 Often fails to build | 🟢 Works |
+| **Alpine / musl Linux** | 🟢 Zero-config prebuilds (`npm install` works on Alpine) | 🔴 Often fails to build | 🟢 Works |
 
 > **Bottom line:** `talib` is a build headache; `technicalindicators` is fine for prototypes but chokes on production load (GC pauses, blocked event loop, no custom formulas). `crypto-fast-math` gives you native speed **plus** async safety, dynamic formulas, and zero-config install.
 
@@ -102,30 +103,30 @@ npm install crypto-fast-math
 ```
 
 That's it. `node-gyp-build` picks the right prebuilt binary for your OS/architecture during
-`npm install` — prebuilt binaries ship for the five platforms listed in
-[Supported platforms](#supported-platforms).
+`npm install` — prebuilt binaries ship for the platforms listed in
+[Supported platforms](#supported-platforms), including Alpine Linux (musl).
 
 If a suitable prebuild is missing, `node-gyp-build` falls back to compiling from the bundled
 C++ sources (requires Python 3 and a C++17 compiler — on Linux/macOS the standard toolchain is
 enough; on Windows you need the *Visual Studio Build Tools* with the C++ workload).
 
-> **Alpine Linux / musl libc** is not covered by the bundled prebuilds.
-> `npm install` will fall back to compiling from source — install `build-base`
-> and `python3` in the container first:
-> ```dockerfile
-> RUN apk add --no-cache build-base python3
-> ```
+> **Alpine Linux / musl libc** is now covered by the bundled prebuilds.
+> `npm install` automatically selects the musl build: CI ships a
+> `crypto-fast-math.musl.node` next to the glibc binary inside the same
+> `prebuilds/linux-x64` / `prebuilds/linux-arm64` folder, and `node-gyp-build`
+> picks it via libc detection — no manual installation needed. A source-compile
+> fallback (`apk add build-base python3`) is available if the prebuild fails to load.
 
 ## Supported platforms
 
 | Platform | Architecture | Prebuild | Notes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Windows** | x64 | ✅ | — |
 | Windows | ARM64 | ⚠️ | Fallback compile (VS Build Tools) |
 | **Linux** | x64 (glibc) | ✅ | Ubuntu, Debian, Fedora, RHEL |
 | Linux | arm64 (glibc) | ✅ | — |
-| Linux | x64 (musl) | ⚠️ | Alpine: `apk add build-base python3` |
-| Linux | arm64 (musl) | ⚠️ | Alpine: `apk add build-base python3` |
+| Linux | x64 (musl) | ✅ | Alpine / musl libc |
+| Linux | arm64 (musl) | ✅ | Alpine / musl libc |
 | **macOS** | x64 (Intel) | ✅ | — |
 | macOS | arm64 (Apple Silicon) | ✅ | M1 / M2 / M3 |
 | FreeBSD / OpenBSD | any | ⚠️ | Fallback compile |
@@ -142,7 +143,7 @@ enough; on Windows you need the *Visual Studio Build Tools* with the C++ workloa
 - ⚠️ **Electron** — Node-API prebuilds load as-is, no rebuild needed; not
   explicitly tested, so verify on your target Electron version.
 - ✅ **Docker** — any Ubuntu/Debian/glibc-based image works out of the box.
-- ⚠️ **Alpine / musl** — fallback compile; see the note in [Installation](#installation).
+- ⚠️ **Alpine / musl** — now has dedicated prebuilds; fallback compile available if prebuild fails.
 
 ## Quick start
 
@@ -211,7 +212,7 @@ await cfm.sma(prices, 20); // non-blocking, runs on the libuv thread pool
 **Sync vs async — when to use which:**
 
 | Situation | Use | Why |
-|---|---|---|
+| --- | --- | --- |
 | CLI scripts, backtests, worker threads | `…Sync` | No event-loop coordination; lowest overhead per call. |
 | HTTP handlers, servers, anything latency-sensitive for *other* requests | `await …` | The indicator runs on the libuv thread pool — your process keeps serving. |
 | Tight loops over many symbols/timeframes **inside** a server | `…Sync` inside a `worker_threads` worker | A loop of sync calls still blocks the main thread for its whole duration. |
@@ -275,7 +276,7 @@ const complexFormula = `
 ```
 
 | ExprTk feature | Syntax | Use case |
-|---|---|---|
+| --- | --- | --- |
 | **Local variables** | `var x := 0;` | Intermediate values without polluting `params` |
 | **Blocks** | `{ stmt1; stmt2; stmt3; }` | Group statements; last expression = block result |
 | **Conditionals** | `if(cond, true_val, false_val)` | Ternary-style branching (not if-else blocks) |
@@ -291,18 +292,20 @@ const complexFormula = `
 ExprTk evaluates your formula **once per candle**. Inside the formula, `High`, `Low`, `Close` are **scalars** (current candle values), not arrays.
 
 | Syntax | Meaning | Works? |
-|---|---|---|
+| --- | --- | --- |
 | `High[1]` | **Lag of 1** — value of `High` on previous candle | ✅ Yes |
 | `High[2]` | Lag of 2 — two candles ago | ✅ Yes |
 | `High[i]` where `i` is a loop variable | **NOT array indexing** — ExprTk tries to resolve `i` as a variable, not an index | ❌ Breaks logic |
 
 **Wrong (what you'd write in JS):**
+
 ```ts
 var i := 1; var localHigh := High;
 while (i < 5) { if (High[i] > localHigh) { localHigh := High[i]; } i := i + 1; };
 ```
 
 **Right (idiomatic ExprTk — fixed lags):**
+
 ```ts
 localHigh := max(High, max(High[1], max(High[2], max(High[3], High[4]))));
 ```
@@ -314,7 +317,7 @@ The fixed-lag version compiles to a single native `max` instruction per candle. 
 **Why use multi-line ExprTk scripts:**
 
 | JS approach | ExprTk (native) |
-|---|---|
+| --- | --- |
 | Multiple passes + intermediate arrays → GC pressure | **Single pass** — logic fused in C++ |
 | `new Function()` → security risk, kills V8 JIT | **AST compiled safely** — no code injection |
 | Hard to maintain complex logic in JS strings | **Readable scripting language** with vars/loops/if |
@@ -345,7 +348,7 @@ const signals = cfm.calculateSync({
 **What you get:**
 
 | Advantage | Preserved? |
-|---|---|
+| --- | --- |
 | **Dynamic formulas** | ✅ Formula string from config/DB |
 | **Zero GC** | ✅ All typed arrays, single `memcpy` |
 | **Single native pass** | ✅ For the dynamic part (indicators precomputed in JS) |
@@ -468,7 +471,7 @@ import {
 ```
 
 | Group | Indicator | Async / Sync | Inputs | Parameters | Returns |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | **Trend** | SMA | `sma` / `smaSync` | `prices` | `period` | `number[]` |
 | | EMA | `ema` / `emaSync` | `prices` | `period` | `number[]` |
 | | WMA | `wma` / `wmaSync` | `prices` | `period` | `number[]` |
@@ -521,7 +524,7 @@ const { upper, middle, lower } = cfm.bollingerSync(closes, 20, undefined, { outp
 ```
 
 | | Default (`number[]`) | `{ output: 'typed' }` (`Float64Array`) |
-|---|---|---|
+| --- | --- | --- |
 | Result type | `number[]` | `Float64Array` |
 | Conversion cost per 100 k values | ≈0.5 ms | none (zero-copy) |
 | Best for | JSON, spreads, `Array`-only APIs, destructuring into plain code | Feeding the result back into another indicator, `calculate` params, charts, numeric loops |
@@ -535,7 +538,7 @@ the option — no casts needed.
 existing call keeps its `number[]` result:
 
 | Old code | Still works | Faster variant |
-|---|---|---|
+| --- | --- | --- |
 | `cfm.smaSync(closes, 20)` | ✅ unchanged | `cfm.smaSync(closes, 20, { output: 'typed' })` |
 | `const r = await cfm.macd(c, 12, 26, 9)` | ✅ unchanged | add `{ output: 'typed' }` → typed fields |
 | Results fed into `calculate({ params })` | ✅ either type accepted | pass the typed result straight through — no copy |
@@ -616,10 +619,10 @@ calculate({ formula, params, returnType? }): Promise<number[] | boolean[]>
 ```
 
 | Option | Type | Description |
-|---|---|---|
+| --- | --- | --- |
 | `formula` | `string` | Any valid ExprTk expression. |
 | `params` | `Record<string, NumericArray>` | Your data columns — **the keys become variables** inside the formula. |
-| `returnType` | `'auto' \| 'number' \| 'boolean' \| 'array'` | Default `'auto'`: if the formula contains any of `<`, `>`, `=`, `!`, `&&`, `||` the result is `boolean[]`, otherwise `number[]`. |
+| `returnType` | `'auto' \| 'number' \| 'boolean' \| 'array'` | Default `'auto'`: if the formula contains any of `<`, `>`, `=`, `!`, `&&`, `\|\|` the result is `boolean[]`, otherwise `number[]`. |
 
 ### Variables are your column names
 
@@ -659,7 +662,7 @@ const spread = cfm.calculateSync({
 ### Common mistakes
 
 | Mistake | What happens | Fix |
-|---|---|---|
+| --- | --- | --- |
 | Using a variable not present in `params` | Throws `ExprTk parse error: ERR239 - Undefined symbol: 'Open'` | Add the column to `params`, or fix the typo — names are **case-sensitive**. |
 | Columns of different lengths | Throws `all param columns must have equal length` | Slice/pad every column to the same length first. |
 | Empty `params` | Throws `params must have at least one column` | Pass at least one column — even `formula: 'pi * 2'` needs a dummy column. |
@@ -809,7 +812,7 @@ const signals = cfm.calculateSync({
 ## Performance
 
 Benchmarks below compare the native core against **hand-written, V8-optimised JavaScript** over
-**5 000 000 candles** (run it yourself: `node benchmark.js`). Native functions receive
+**5 000 000 candles** (run it yourself: `node benchmark-baseline.js`). Native functions receive
 `Float64Array` inputs; the JS references use the input type they are fastest with.
 Measured on Windows, Node.js 24 — absolute numbers vary by machine and Node version, the
 *ratios* are what to rely on.
@@ -819,7 +822,7 @@ Measured on Windows, Node.js 24 — absolute numbers vary by machine and Node ve
 Pure conversion cost for **5 000 000 elements**, no indicator involved:
 
 | Conversion | Time | Where it happens |
-|---|---|---|
+| --- | --- | --- |
 | `Array.from(Float64Array)` | ~350 ms | ❌ not used anywhere anymore |
 | tight loop `Float64Array → number[]` | ~44 ms | default API (result → `number[]`) |
 | `Float64Array` copy | ~25 ms | `{ output: 'typed' }` (zero conversion) |
@@ -839,7 +842,7 @@ Three modes: plain `number[]` **input**; `Float64Array` input with default `numb
 and `Float64Array` input with `{ output: 'typed' }`:
 
 | Indicator | `number[]` in | `Float64Array` → `number[]` | `Float64Array` → `typed` | Note |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | SMA (20) | 387 ms | 339 ms | **324 ms** | |
 | EMA (12) | 360 ms | 333 ms | **438 ms** | |
 | RSI (14) | 539 ms | 474 ms | **491 ms** | |
@@ -877,7 +880,7 @@ Both sides measured with **both input types** (the previous benchmark compared J
 against native on `Float64Array`, which flattered the native side):
 
 | Indicator | JS `number[]` | JS `Float64Array` | native → `number[]` | native → `typed` | Verdict (5M) |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | SMA (20) | 41.2 ms | 52.9 ms | 369.9 ms | **400.9 ms** | **7.6× slower than JS** |
 | EMA (12) | 45.5 ms | 55.6 ms | 483.7 ms | **456.4 ms** | **8.2× slower than JS** |
 | RSI (14) | 75.9 ms | 90.3 ms | 583.2 ms | **470.6 ms** | **5.2× slower than JS** |
@@ -888,12 +891,12 @@ against native on `Float64Array`, which flattered the native side):
 
 ² Compared against a **hand-written tight loop** with the same expression — the fairest
 possible JS. Against *idiomatic* JS (`Array.from(closes, i => …)` ≈ 300 ms at 5M) the native formula
-engine is **~1.3–1.8× faster**; both figures appear in the summary of `node benchmark.js`.
+engine is **~1.3–1.8× faster**; both figures appear in the summary of `node benchmark-baseline.js`.
 
 ### Native vs JS — indicator-by-indicator (ratio: native typed / JS Float64; < 1 = native faster)
 
 | Indicator | n=100K | n=1M | n=5M | At 5M: native wins on complex |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | SMA (20) | **0.82×** | 2.06× | 5.06× | — |
 | EMA (12) | 1.07× | 1.62× | — | — |
 | RSI (14) | **0.79×** | 1.29× | 1.11× | — |
@@ -919,10 +922,10 @@ The **async API is a separate, unconditional win**: `await cfm.sma(data, 20)` of
 the libuv thread pool, so a server keeps serving requests while indicators are computed; the sync
 form blocks the event loop.
 
-**Practical guidance**
+#### Practical guidance
 
 | Situation | Recommendation |
-|---|---|
+| --- | --- |
 | Backtests, tight loops, worker threads, **< 200k elements** | `…Sync` + `Float64Array` input + `{ output: 'typed' }` — native faster. |
 | Backtests, **> 500k elements**, simple indicators (SMA, EMA, RSI) | Consider pure JS tight loops — marshalling overhead dominates. |
 | Complex multi-pass indicators (WMA, ADX, Ichimoku, Bollinger) | Native — single pass amortises marshalling cost. |
@@ -964,7 +967,7 @@ await cfm.sma(prices, 20); // runs on libuv thread pool
 **Benchmark (10 × 5M candles concurrently):**
 
 | Mode | Total time | Event loop blocked? |
-|---|---|---|
+| --- | --- | --- |
 | 10 × `smaSync` | ~2360 ms | **YES** — 2.3 s frozen |
 | 10 × `await sma` (parallel) | ~2290 ms | **NO** — serves requests during |
 
@@ -993,7 +996,7 @@ for (let i = 0; i < 20; i++) {
 ```
 
 | Approach | 20 evals × 5M candles | Why |
-|---|---|---|
+| --- | --- | --- |
 | `new Function` (JS) | ~7,200 ms | Re-parses + no JIT per call |
 | `cfm.calculateSync` (ExprTk) | **~1,800 ms** | **1 parse, 20× native eval** |
 
@@ -1016,7 +1019,7 @@ const rsi = cfm.rsiSync(closes, 14, { output: 'typed' }); // Float64Array
 ```
 
 | Output mode | Allocations per call (100k) | GC impact |
-|---|---|---|
+| --- | --- | --- |
 | `number[]` (default) | ~100k JS numbers + array | Frequent minor GC |
 | `{ output: 'typed' }` | **1** `Float64Array` (memcpy) | **Near-zero** |
 
@@ -1031,9 +1034,9 @@ For 50 pairs streaming live, `typed` mode keeps RSS flat and GC pauses non-exist
 **The proof — install matrix:**
 
 | Environment | `npm i talib` | `npm i crypto-fast-math` |
-|---|---|---|
+| --- | --- | --- |
 | Ubuntu (glibc) | ⚠️ Needs build tools | ✅ Prebuild |
-| Alpine (musl) | ❌ Often fails | ⚠️ Fallback compile (documented) |
+| Alpine (musl) | ✅ Prebuilds | 🟢 Works |
 | Windows | ❌ Needs VS Build Tools | ✅ Prebuild |
 | macOS ARM64 | ⚠️ Sometimes | ✅ Prebuild |
 | Docker (node:20-slim) | ❌ Missing Python/gcc | ✅ Works |
@@ -1046,7 +1049,7 @@ Prebuilds ship for **5 platforms** (Win x64, Linux x64/ARM64 glibc, macOS x64/AR
 ### When plain JS is fine
 
 | Scenario | Recommendation |
-|---|---|
+| --- | --- |
 | One-off backtest, < 50k candles | Pure JS — simplicity wins |
 | Prototyping a single indicator | `technicalindicators` is fine |
 | Browser / edge runtime | JS only (WASM build planned) |
@@ -1057,7 +1060,7 @@ Prebuilds ship for **5 platforms** (Win x64, Linux x64/ARM64 glibc, macOS x64/AR
 > ### 🎯 Why this package exists (honest summary)
 >
 > | If you need... | Use this |
-> |---|---|
+> | --- | --- |
 > | **Event loop never freezes** under load | `await cfm.sma(...)` — runs on libuv thread pool |
 > | **Formulas from config/DB** at runtime | `cfm.calculateSync({ formula, params })` — ExprTk parses once |
 > | **Zero GC pauses** on 50+ pairs streaming | `{ output: 'typed' }` → `Float64Array` via `memcpy` |
@@ -1065,7 +1068,7 @@ Prebuilds ship for **5 platforms** (Win x64, Linux x64/ARM64 glibc, macOS x64/AR
 > | **Complex indicators** (ADX, Ichimoku, Bollinger) | Single native pass vs multiple JS scans |
 >
 > | If you need... | Don't bother |
-> |---|---|
+> | --- | --- |
 > | Raw SMA/RSI speed on **> 500k candles** | Pure JS tight loop on `Float64Array` is 5–12× faster |
 > | Browser / edge runtime | Not supported (WASM planned) |
 > | Zero dependencies | Adds ~2 MB native binary |
@@ -1112,7 +1115,7 @@ const d = cfm.macdSync(closes, 12, 26, 9, { output: 'typed' }); // { macd: Float
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
-|---|---|---|
+| --- | --- | --- |
 | `Error: Cannot find module 'crypto-fast-math'` | Package not installed (or wrong directory) | `npm install crypto-fast-math`; check `node_modules/` |
 | `The specified module could not be found` (Windows) | Missing Visual C++ Redistributable | Install [VC++ Redist x64](https://aka.ms/vs/17/release/vc_redist.x64.exe) |
 | `node-gyp-build` fails during `npm install` | No prebuild for your platform — source fallback needs a toolchain | Windows: Visual Studio Build Tools with the C++ workload; macOS: `xcode-select --install`; Linux: `sudo apt install build-essential` |
@@ -1188,7 +1191,7 @@ npm run prebuild    # compiles the addon and writes prebuilds/<platform>-<arch>/
 
 Resulting layout:
 
-```
+```text
 prebuilds/
   win32-x64/crypto-fast-math.node
   linux-x64/crypto-fast-math.node
@@ -1240,8 +1243,3 @@ Notes:
 ## License
 
 MIT © Koderkup — see [LICENSE](./LICENSE).
-
-
-
-
-

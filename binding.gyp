@@ -53,7 +53,7 @@
                     "cflags_cc": ["/GR", "/EHsc"],
                     "cflags_cc!": ["/GR-", "/EHs-c-", "-fno-rtti", "-fno-exceptions"]
                 }],
-                ["OS==\"linux\"", {
+                ["OS==\"linux\" and target_arch==\"x64\"", {
                     "cflags_cc": ["-mavx2"]
                 }],
                 ["OS==\"mac\" and target_arch==\"x64\"", {
