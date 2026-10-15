@@ -41,6 +41,7 @@ const x   = cfm.calculateSync({                            // your own formula
 - [Recipes](#recipes)
 - [Performance](#performance)
 - [Where native wins and where JS is fine](#where-native-wins-and-where-js-is-fine)
+- [Automatic JavaScript / Native dispatch](#automatic-javascript--native-dispatch)
 - [Browser support](#browser-support)
 - [TypeScript](#typescript)
 - [Troubleshooting](#troubleshooting)
@@ -1072,6 +1073,46 @@ Prebuilds ship for **5 platforms** (Win x64, Linux x64/ARM64 glibc, macOS x64/AR
 > | Raw SMA/RSI speed on **> 500k candles** | Pure JS tight loop on `Float64Array` is 5–12× faster |
 > | Browser / edge runtime | Not supported (WASM planned) |
 > | Zero dependencies | Adds ~2 MB native binary |
+
+---
+
+## Automatic JavaScript / Native dispatch
+
+`crypto-fast-math` can automatically select the most appropriate execution path for supported
+operations, balancing computation speed against the overhead of calling native code.
+
+For **SMA and EMA** (sync `smaSync`/`emaSync` and async `sma`/`ema`), the default `policy: 'auto'`
+chooses between a JavaScript implementation and the native C++ one based on input characteristics
+and output options:
+
+- Arrays with **fewer than 4 000 elements** run in JavaScript — at that size the tight JS loop
+  beats paying the N-API call overhead.
+- `{ output: 'typed' }` or a `target` buffer **always runs native** — no output conversion to
+  amortise, so a single `memcpy` out wins.
+- Plain `number[]` inputs containing `null`/`undefined` **always run native**, preserving the
+  addon's mixed-column semantics (`null`/`undefined` → `NaN`).
+- Everything else (≥ 4 000 elements) runs native.
+
+You can also explicitly select an execution policy via `OutputOptions.policy`:
+
+```ts
+cfm.smaSync(closes, 20);                        // policy: 'auto' (default)
+cfm.smaSync(closes, 20, { policy: 'js' });      // force the JavaScript implementation
+cfm.emaSync(closes, 12, { policy: 'native' });  // force the native C++ implementation
+```
+
+| Policy | Behaviour |
+| --- | --- |
+| `'auto'` (default) | Select the implementation using the dispatch rules above. |
+| `'js'` | Always the JavaScript implementation. |
+| `'native'` | Always the native C++ implementation. |
+
+Automatic dispatch is currently implemented for **SMA and EMA only**. Other indicators ignore
+`policy` and use their existing execution paths.
+
+This design provides a foundation for extending automatic dispatch to additional operations over
+time, guided by benchmark results and real-world workloads. The goal is not to use C++ for
+everything, but to use the implementation that makes the most sense for each supported workload.
 
 ---
 
